@@ -18,6 +18,13 @@ EXPECTED_TOOLS = {
     "get_exercise_template",
     "search_exercise_templates",
     "get_exercise_history",
+    "list_body_measurements",
+    "get_body_measurement",
+    "get_body_measurements_in_range",
+    "list_routines",
+    "get_routine",
+    "list_routine_folders",
+    "get_routine_folder",
 }
 
 

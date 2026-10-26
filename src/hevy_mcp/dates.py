@@ -40,6 +40,15 @@ def parse_bound(value: str, name: str, zone: tzinfo, *, end: bool = False) -> da
     return moment if moment.tzinfo else moment.replace(tzinfo=zone)
 
 
+def parse_day(value: str, name: str) -> date:
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        raise ToolError(
+            f"{name} must be an ISO 8601 date such as 2024-06-01, got {value!r}."
+        ) from None
+
+
 def parse_optional_range(
     start_date: str | None, end_date: str | None, zone: tzinfo
 ) -> tuple[datetime | None, datetime | None]:

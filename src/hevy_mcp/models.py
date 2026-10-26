@@ -161,3 +161,95 @@ class ExerciseHistoryEntry(HevyModel):
 class ExerciseHistory(HevyModel):
     exercise_template_id: str | None = None
     exercise_history: list[ExerciseHistoryEntry] = []
+
+
+class BodyMeasurement(HevyModel):
+    date: str | None = None
+    weight_kg: Number | None = None
+    lean_mass_kg: Number | None = None
+    fat_percent: Number | None = None
+    neck_cm: Number | None = None
+    shoulder_cm: Number | None = None
+    chest_cm: Number | None = None
+    left_bicep_cm: Number | None = None
+    right_bicep_cm: Number | None = None
+    left_forearm_cm: Number | None = None
+    right_forearm_cm: Number | None = None
+    # Hevy leaves the unit off these names; like the others, they are in cm.
+    abdomen: Number | None = None
+    waist: Number | None = None
+    hips: Number | None = None
+    left_thigh: Number | None = None
+    right_thigh: Number | None = None
+    left_calf: Number | None = None
+    right_calf: Number | None = None
+
+
+class BodyMeasurementPage(HevyModel):
+    page: int | None = None
+    page_count: int | None = None
+    body_measurements: list[BodyMeasurement] = []
+
+
+class BodyMeasurementRange(BaseModel):
+    start_date: str
+    end_date: str
+    body_measurements: list[BodyMeasurement]
+    truncated: bool = Field(
+        description="True if the page cap stopped the search before reaching start_date."
+    )
+
+
+class RepRange(HevyModel):
+    start: Number | None = None
+    end: Number | None = None
+
+
+class RoutineSet(HevyModel):
+    index: int | None = None
+    type: str | None = None
+    weight_kg: Number | None = None
+    reps: Number | None = None
+    rep_range: RepRange | None = None
+    distance_meters: Number | None = None
+    duration_seconds: Number | None = None
+    custom_metric: Number | None = None
+
+
+class RoutineExercise(HevyModel):
+    index: int | None = None
+    title: str | None = None
+    rest_seconds: Number | None = None
+    notes: str | None = None
+    exercise_template_id: str | None = None
+    superset_id: int | None = None
+    sets: list[RoutineSet] = []
+
+
+class Routine(HevyModel):
+    id: str | None = None
+    title: str | None = None
+    folder_id: int | None = None
+    updated_at: str | None = None
+    created_at: str | None = None
+    exercises: list[RoutineExercise] = []
+
+
+class RoutinePage(HevyModel):
+    page: int | None = None
+    page_count: int | None = None
+    routines: list[Routine] = []
+
+
+class RoutineFolder(HevyModel):
+    id: int | None = None
+    index: int | None = None
+    title: str | None = None
+    updated_at: str | None = None
+    created_at: str | None = None
+
+
+class RoutineFolderPage(HevyModel):
+    page: int | None = None
+    page_count: int | None = None
+    routine_folders: list[RoutineFolder] = []
