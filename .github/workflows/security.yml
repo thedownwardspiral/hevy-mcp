@@ -1,0 +1,154 @@
+# Security checks that adapt to the repo's visibility.
+#
+# Public repos get GitHub's own tools (CodeQL, dependency review), which are
+# free there. Private repos on a personal account cannot use those at any
+# price, so they get open-source replacements instead: Semgrep CE for static
+# analysis and OSV-Scanner for vulnerable dependencies. gitleaks runs on both.
+#
+# Every job reports on every PR, so the "Protect main" ruleset can require all
+# of them: a job skipped for the other visibility counts as passing.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Scheduled runs carry no repository payload, so read visibility and
+  # languages from the API instead of github.event.
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      private: ${{ steps.detect.outputs.private }}
+      codeql-languages: ${{ steps.detect.outputs.codeql-languages }}
+    steps:
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)
+          # shellcheck disable=SC2016 # $map is jq, not shell
+          # CodeQL languages that need no build step. Compiled languages that
+          # need one (Go, C/C++, Swift) are left out; add them by hand.
+          languages=$(gh api "repos/$GITHUB_REPOSITORY/languages" --jq '
+            {"Python": "python",
+             "JavaScript": "javascript-typescript",
+             "TypeScript": "javascript-typescript",
+             "Ruby": "ruby",
+             "Java": "java-kotlin",
+             "Kotlin": "java-kotlin",
+             "C#": "csharp"} as $map
+            | [keys[] | $map[.] // empty] + ["actions"] | unique | join(",")')
+          echo "private=$private" >> "$GITHUB_OUTPUT"
+          echo "codeql-languages=$languages" >> "$GITHUB_OUTPUT"
+          echo "private=$private, CodeQL languages: $languages"
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PR comments would need pull-requests: write; the failed check is enough.
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  # Public only: needs the dependency graph, which private repos on a
+  # personal account cannot use for dependency review.
+  dependency-review:
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.private == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
+  # Public only: CodeQL's license does not cover private code without a
+  # GitHub Code Security license, which personal accounts cannot buy.
+  codeql:
+    needs: detect
+    if: needs.detect.outputs.private == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ needs.detect.outputs.codeql-languages }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+
+  # Private only: stands in for CodeQL. Results appear in the job log, since
+  # the Security tab is not available to private repos on a personal account.
+  semgrep:
+    needs: detect
+    if: needs.detect.outputs.private == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Semgrep CE
+        run: >-
+          docker run --rm -v "$PWD:/src:ro" -w /src
+          semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198
+          semgrep scan --config p/default --error --metrics=off
+
+  # Private only: stands in for dependency review. --no-resolve checks only
+  # versions written in the repo; guessing unpinned transitive versions
+  # produced false positives. Commit lockfiles for full coverage.
+  osv-scanner:
+    needs: detect
+    if: needs.detect.outputs.private == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: OSV-Scanner
+        run: >-
+          docker run --rm -v "$PWD:/src:ro"
+          ghcr.io/google/osv-scanner@sha256:afd838850ac1a0fcc15ff4a041dc9ba11123c3f0d2666217a5f0fcf9222b55fa
+          scan source --recursive --no-resolve --allow-no-lockfiles /src

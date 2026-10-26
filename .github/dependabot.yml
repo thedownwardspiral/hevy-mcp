@@ -1,0 +1,26 @@
+# Dependabot version updates. Security updates are enabled separately (see
+# .github/setup-repo.sh) and do not depend on this file.
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in .github/workflows/ current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Add an entry per package manager the repo uses, for example:
+  #
+  # - package-ecosystem: pip        # or npm, docker, gomod, cargo, ...
+  #   directory: /
+  #   schedule:
+  #     interval: weekly
+  #   cooldown:
+  #     default-days: 7
+  #   groups:
+  #     dependencies:
+  #       patterns: ["*"]
