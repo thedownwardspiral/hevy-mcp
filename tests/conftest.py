@@ -1,0 +1,114 @@
+"""Test harness: the real server behind FastMCP's in-memory client, with Hevy
+and Vault HTTP served by a fake transport."""
+
+import json
+import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from fastmcp import Client
+
+from hevy_mcp.server import create_server
+
+FIXTURES = Path(__file__).parent / "fixtures"
+HEVY = "https://api.hevyapp.com"
+TEST_API_KEY = "00000000-0000-4000-8000-000000000000"
+
+Reply = httpx.Response | Callable[[httpx.Request], httpx.Response]
+
+
+def load(name: str) -> Any:
+    """Load a JSON fixture, e.g. ``load("hevy/user_info.json")``."""
+    return json.loads((FIXTURES / name).read_text())
+
+
+class FakeHTTP:
+    """Routes requests to canned responses and records every request.
+
+    A route matches on method, URL (scheme, host and path) and, optionally, a
+    subset of query parameters. A route given several replies serves them in
+    order and then keeps repeating the last one.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+        self.unmatched: list[httpx.Request] = []
+        self._routes: list[tuple[str, str, dict[str, str], list[Reply]]] = []
+        self.transport = httpx.MockTransport(self._handle)
+
+    def route(
+        self,
+        method: str,
+        url: str,
+        *replies: Reply,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
+        status: int = 200,
+    ) -> None:
+        if not url.startswith("http"):
+            url = HEVY + url
+        if not replies:
+            replies = (httpx.Response(status, json=json),)
+        wanted = {k: str(v) for k, v in (params or {}).items()}
+        # Newest routes win, so a test can override a default.
+        self._routes.insert(0, (method, url, wanted, list(replies)))
+
+    def get(self, url: str, *replies: Reply, **kwargs: Any) -> None:
+        self.route("GET", url, *replies, **kwargs)
+
+    def post(self, url: str, *replies: Reply, **kwargs: Any) -> None:
+        self.route("POST", url, *replies, **kwargs)
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        url = f"{request.url.scheme}://{request.url.host}{request.url.path}"
+        query = dict(request.url.params)
+        for method, route_url, wanted, replies in self._routes:
+            if method == request.method and route_url == url and wanted.items() <= query.items():
+                reply = replies.pop(0) if len(replies) > 1 else replies[0]
+                return reply(request) if callable(reply) else reply
+        self.unmatched.append(request)
+        return httpx.Response(418, json={"error": f"no fake route for {request.method} {url}"})
+
+    def hevy_requests(self, path: str | None = None) -> list[httpx.Request]:
+        return [
+            r
+            for r in self.requests
+            if r.url.host == "api.hevyapp.com" and (path is None or r.url.path == path)
+        ]
+
+
+@pytest.fixture
+def fake() -> FakeHTTP:
+    return FakeHTTP()
+
+
+@pytest.fixture
+def make_client(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Client]:
+    """Build a client for a fresh server configured from the given env vars.
+
+    Defaults to the ``HEVY_API_KEY`` override and no retry delay; pass
+    ``HEVY_API_KEY=None`` to drop the override.
+    """
+
+    def _make(**env: str | None) -> Client:
+        for key in list(os.environ):
+            if key.startswith(("HEVY_", "VAULT_", "MCP_")) or key in {"TZ", "LOG_LEVEL"}:
+                monkeypatch.delenv(key)
+        settings = {"HEVY_API_KEY": TEST_API_KEY, "HEVY_RETRY_BACKOFF_SECONDS": "0"} | env
+        for key, value in settings.items():
+            if value is not None:
+                monkeypatch.setenv(key, value)
+        return Client(create_server(transport=fake.transport))
+
+    return _make
+
+
+@pytest.fixture
+async def client(make_client: Callable[..., Client], fake: FakeHTTP):
+    async with make_client() as c:
+        yield c
+    assert not fake.unmatched, f"requests without a fake route: {fake.unmatched}"

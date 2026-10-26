@@ -1,0 +1,11 @@
+{
+  "data": {
+    "id": "9c465af3-de7d-42bc-9c7c-f0170396358b",
+    "username": "jhon",
+    "name": "John doe",
+    "url": "https://hevy.com/user/jhon",
+    "weight_unit": "kg",
+    "distance_unit": "kilometers",
+    "is_pro": true
+  }
+}

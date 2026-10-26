@@ -1,0 +1,39 @@
+[project]
+name = "hevy-mcp"
+version = "0.1.0"
+description = "Read-only MCP server for Hevy workout and body-measurement data"
+authors = [
+    { name = "thedownwardspiral", email = "12749614+thedownwardspiral@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastmcp>=4.1,<5",
+    "httpx>=0.28.1",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+]
+
+[project.scripts]
+hevy-mcp = "hevy_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
