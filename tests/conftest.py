@@ -78,7 +78,7 @@ class FakeHTTP:
         self.requests.append(request)
         # Match the raw (still percent-encoded) path, as Hevy would see it.
         path = request.url.raw_path.split(b"?")[0].decode()
-        url = f"{request.url.scheme}://{request.url.host}{path}"
+        url = f"{request.url.scheme}://{request.url.netloc.decode()}{path}"
         query = dict(request.url.params)
         for method, route_url, wanted, replies in self._routes:
             if method == request.method and route_url == url and wanted.items() <= query.items():
