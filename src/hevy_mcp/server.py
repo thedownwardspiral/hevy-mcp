@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import AsyncIterator
 from importlib.metadata import version
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from fastmcp import FastMCP
@@ -12,17 +12,44 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp_types import ToolAnnotations
+from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
-from hevy_mcp.hevy import HevyClient, HevyError
-from hevy_mcp.models import UserInfo
+from hevy_mcp.dates import parse_bound, parse_range
+from hevy_mcp.hevy import MAX_PAGE_SIZE, HevyClient, HevyError
+from hevy_mcp.models import (
+    TrainingSummary,
+    UserInfo,
+    Workout,
+    WorkoutCount,
+    WorkoutEventPage,
+    WorkoutPage,
+    WorkoutRange,
+)
 from hevy_mcp.secrets import SecretSourceError, resolve_api_key
 
 logger = logging.getLogger(__name__)
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+
+Page = Annotated[int, Field(ge=1, description="Page number, starting at 1.")]
+PageSize = Annotated[
+    int, Field(ge=1, description=f"Items per page; values above {MAX_PAGE_SIZE} are capped.")
+]
+StartDate = Annotated[
+    str,
+    Field(
+        description="First day or moment to include, ISO 8601 (2024-06-01 or "
+        "2024-06-01T18:30:00Z). Dates without an offset use the server's timezone."
+    ),
+]
+EndDate = Annotated[
+    str,
+    Field(description="Last day or moment to include, ISO 8601. A date includes that whole day."),
+]
 
 INSTRUCTIONS = """\
 Read-only access to the user's Hevy workout and body-measurement data.
@@ -79,6 +106,8 @@ def create_server(
                 api_key,
                 max_retries=settings.hevy_max_retries,
                 backoff_seconds=settings.hevy_retry_backoff_seconds,
+                max_pages=settings.hevy_range_max_pages,
+                template_cache_seconds=settings.hevy_template_cache_seconds,
             )
             yield {}
 
@@ -101,6 +130,62 @@ def create_server(
         preferred weight_unit and distance_unit. Use the preferred units when
         presenting weights (stored in kg) and distances (stored in metres)."""
         return await state.hevy.user_info()
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_workouts(page: Page = 1, page_size: PageSize = MAX_PAGE_SIZE) -> WorkoutPage:
+        """List workouts newest first, one page at a time, with every exercise and
+        set. Returns the page number and page_count, so you can tell whether more
+        pages exist. To look at a period, prefer get_workouts_in_range."""
+        return await state.hevy.workouts(page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_workout(workout_id: str) -> Workout:
+        """Get one workout in full: title, start and end time, and each exercise's
+        sets with weight_kg, reps, rpe, distance_meters and duration_seconds."""
+        return await state.hevy.workout(workout_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_workout_count() -> WorkoutCount:
+        """Get the total number of workouts the user has logged."""
+        return await state.hevy.workout_count()
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_workouts_in_range(start_date: StartDate, end_date: EndDate) -> WorkoutRange:
+        """Get every workout that started between two dates, newest first, for
+        questions like "what did I do last week?". If truncated is true, the
+        search hit its page limit before reaching start_date: narrow the range."""
+        period = parse_range(start_date, end_date, settings.zone)
+        workouts, truncated = await state.hevy.workouts_in_range(period, settings.zone)
+        return WorkoutRange(
+            start_date=period.start.isoformat(),
+            end_date=period.end.isoformat(),
+            workouts=workouts,
+            truncated=truncated,
+        )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_training_summary(start_date: StartDate, end_date: EndDate) -> TrainingSummary:
+        """Summarise training between two dates: workout count, total duration,
+        total volume (weight_kg x reps), sets and reps, per-exercise set counts and
+        top weight, and sets per primary muscle group. Warm-up sets are excluded."""
+        period = parse_range(start_date, end_date, settings.zone)
+        workouts, truncated = await state.hevy.workouts_in_range(period, settings.zone)
+        templates = await state.hevy.all_exercise_templates() if workouts else []
+        return training_summary(workouts, templates, period, settings.zone, truncated=truncated)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_workout_events(
+        since: Annotated[
+            str | None,
+            Field(description="Only events after this ISO 8601 date or date-time."),
+        ] = None,
+        page: Page = 1,
+        page_size: PageSize = MAX_PAGE_SIZE,
+    ) -> WorkoutEventPage:
+        """List workout changes since a date: "updated" events carry the workout,
+        "deleted" events its id and deleted_at. Useful for "what changed recently?"."""
+        moment = parse_bound(since, "since", settings.zone) if since else None
+        return await state.hevy.workout_events(moment, page, page_size)
 
     return mcp
 

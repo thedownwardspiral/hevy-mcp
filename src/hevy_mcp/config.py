@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     hevy_timeout_seconds: float = Field(10.0, gt=0)
     hevy_max_retries: int = Field(3, ge=0)
     hevy_retry_backoff_seconds: float = Field(0.5, ge=0)
+    # Most pages a range query walks before it stops and reports truncation.
+    hevy_range_max_pages: int = Field(50, ge=1)
+    hevy_template_cache_seconds: float = Field(600, ge=0)
 
     log_level: str = "INFO"
     mcp_host: str = "0.0.0.0"

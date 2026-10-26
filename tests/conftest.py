@@ -25,6 +25,18 @@ def load(name: str) -> Any:
     return json.loads((FIXTURES / name).read_text())
 
 
+def page(key: str, items: list[Any], page: int = 1, page_count: int = 1) -> dict[str, Any]:
+    """A Hevy paginated response body."""
+    return {"page": page, "page_count": page_count, key: items}
+
+
+def workout_at(workout_id: str, start_time: str, end_time: str | None = None) -> dict[str, Any]:
+    """The workout fixture with a different id and time."""
+    workout = load("hevy/workout.json")
+    workout |= {"id": workout_id, "start_time": start_time, "end_time": end_time or start_time}
+    return workout
+
+
 class FakeHTTP:
     """Routes requests to canned responses and records every request.
 
@@ -64,7 +76,9 @@ class FakeHTTP:
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        url = f"{request.url.scheme}://{request.url.host}{request.url.path}"
+        # Match the raw (still percent-encoded) path, as Hevy would see it.
+        path = request.url.raw_path.split(b"?")[0].decode()
+        url = f"{request.url.scheme}://{request.url.host}{path}"
         query = dict(request.url.params)
         for method, route_url, wanted, replies in self._routes:
             if method == request.method and route_url == url and wanted.items() <= query.items():
