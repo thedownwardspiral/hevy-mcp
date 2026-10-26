@@ -18,6 +18,7 @@ from pydantic import BaseModel, SecretStr
 
 from hevy_mcp.dates import DateRange, parse_timestamp, to_hevy
 from hevy_mcp.models import (
+    ExerciseHistory,
     ExerciseTemplate,
     ExerciseTemplatePage,
     UserInfo,
@@ -202,6 +203,37 @@ class HevyClient:
             period,
             lambda w: parse_timestamp(w.start_time, zone),
         )
+
+    async def exercise_templates(self, page: int, page_size: int) -> ExerciseTemplatePage:
+        return await self._page(
+            ExerciseTemplatePage,
+            "/v1/exercise_templates",
+            page,
+            page_size,
+            MAX_TEMPLATE_PAGE_SIZE,
+        )
+
+    async def exercise_template(self, template_id: str) -> ExerciseTemplate:
+        body = await self._get(
+            f"/v1/exercise_templates/{_segment(template_id)}",
+            what=f"exercise template {template_id!r}",
+        )
+        return ExerciseTemplate.model_validate(body)
+
+    async def exercise_history(
+        self, template_id: str, start: datetime | None, end: datetime | None
+    ) -> ExerciseHistory:
+        params = {}
+        if start:
+            params["start_date"] = to_hevy(start)
+        if end:
+            params["end_date"] = to_hevy(end)
+        body = await self._get(
+            f"/v1/exercise_history/{_segment(template_id)}",
+            what=f"exercise template {template_id!r}",
+            params=params,
+        )
+        return ExerciseHistory.model_validate({"exercise_template_id": template_id} | body)
 
     async def all_exercise_templates(self) -> list[ExerciseTemplate]:
         """Every exercise template, cached briefly because they rarely change."""

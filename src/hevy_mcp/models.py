@@ -134,3 +134,30 @@ class TrainingSummary(BaseModel):
         description="Working sets per primary muscle group of each exercise template."
     )
     truncated: bool
+
+
+class ExerciseTemplateSearch(BaseModel):
+    query: str
+    exercise_templates: list[ExerciseTemplate]
+
+
+class ExerciseHistoryEntry(HevyModel):
+    """One set of the exercise, with the workout it belongs to."""
+
+    workout_id: str | None = None
+    workout_title: str | None = None
+    workout_start_time: str | None = None
+    workout_end_time: str | None = None
+    exercise_template_id: str | None = None
+    weight_kg: Number | None = None
+    reps: Number | None = None
+    distance_meters: Number | None = None
+    duration_seconds: Number | None = None
+    rpe: Number | None = None
+    custom_metric: Number | None = None
+    set_type: str | None = None
+
+
+class ExerciseHistory(HevyModel):
+    exercise_template_id: str | None = None
+    exercise_history: list[ExerciseHistoryEntry] = []
