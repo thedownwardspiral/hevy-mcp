@@ -1,0 +1,18 @@
+# Local and deployment-specific config: real hostnames and credentials stay out of this public repo
+.env
+.env.*
+compose.override.yml
+compose.override.yaml
+docker-compose.override.yml
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+dist/
+build/
+*.egg-info/
