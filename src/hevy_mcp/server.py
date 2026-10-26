@@ -2,8 +2,8 @@
 
 import logging
 import sys
-from importlib.metadata import version
 from collections.abc import AsyncIterator
+from importlib.metadata import version
 from typing import Any
 
 import httpx
