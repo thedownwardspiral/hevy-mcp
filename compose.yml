@@ -1,0 +1,67 @@
+# Runs the published image on the Docker host behind the existing Traefik.
+#
+# Environment-specific values (hostnames, Traefik names, Vault address) come
+# from a .env file next to this one; see env.example. Both .env and
+# compose.override.yml are gitignored, so real values never reach this public
+# repo. The Hevy API key is not here at all: the server reads it from Vault.
+name: hevy-mcp
+
+services:
+  hevy-mcp:
+    image: ghcr.io/thedownwardspiral/hevy-mcp:${HEVY_MCP_TAG:-latest}
+    restart: unless-stopped
+    # No ports: Traefik reaches the container over the shared network.
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:?set VAULT_ADDR, e.g. https://vault.<home-domain>}
+      VAULT_ROLE_ID_FILE: /run/secrets/vault_role_id
+      VAULT_SECRET_ID_FILE: /run/secrets/vault_secret_id
+      VAULT_CACERT: /etc/hevy-mcp/vault-ca.pem
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_PATH: ${VAULT_KV_PATH:-hevy-mcp}
+      TZ: ${TZ:-UTC}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    secrets:
+      - vault_role_id
+      - vault_secret_id
+    volumes:
+      - ${VAULT_CACERT_SOURCE:-./secrets/vault-ca.pem}:/etc/hevy-mcp/vault-ca.pem:ro
+    networks:
+      - traefik
+    # If the container can't resolve vault.<home-domain>, point it at the home
+    # DNS server, or pin the address:
+    # dns:
+    #   - 192.0.2.53
+    # extra_hosts:
+    #   - "vault.<home-domain>:192.0.2.10"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.hevy-mcp.rule: Host(`${HEVY_MCP_HOSTNAME:-hevy-mcp.home.example}`)
+      # Use an entrypoint that is reachable only from the home network.
+      traefik.http.routers.hevy-mcp.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.hevy-mcp.tls: ${TRAEFIK_TLS:-true}
+      traefik.http.services.hevy-mcp.loadbalancer.server.port: "8000"
+      # If Traefik issues certificates through a resolver, add in
+      # compose.override.yml:
+      #   traefik.http.routers.hevy-mcp.tls.certresolver: <resolver>
+      # No buffering middleware: it would break streamed MCP responses.
+
+secrets:
+  vault_role_id:
+    file: ${VAULT_ROLE_ID_SOURCE:-./secrets/vault_role_id}
+  vault_secret_id:
+    file: ${VAULT_SECRET_ID_SOURCE:-./secrets/vault_secret_id}
+
+networks:
+  traefik:
+    # Traefik runs in its own Compose project; join its network by name.
+    name: ${TRAEFIK_NETWORK:-traefik}
+    external: true

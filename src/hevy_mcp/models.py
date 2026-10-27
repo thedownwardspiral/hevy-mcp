@@ -133,12 +133,18 @@ class TrainingSummary(BaseModel):
     muscle_groups: list[MuscleGroupSummary] = Field(
         description="Working sets per primary muscle group of each exercise template."
     )
-    truncated: bool
+    truncated: bool = Field(
+        description="True if the page cap cut the workouts or the exercise templates short."
+    )
 
 
 class ExerciseTemplateSearch(BaseModel):
     query: str
     exercise_templates: list[ExerciseTemplate]
+    truncated: bool = Field(
+        description="True if the page cap stopped the template listing early, so some "
+        "matches may be missing."
+    )
 
 
 class ExerciseHistoryEntry(HevyModel):

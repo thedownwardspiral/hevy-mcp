@@ -215,3 +215,40 @@ async def test_bad_ca_bundle_fails_startup(make_client, fake, tmp_path):
 
     assert "VAULT_CACERT" in message
     assert fake.requests == []
+
+
+async def test_null_auth_in_the_login_response_fails_startup(make_client, fake):
+    fake.post(LOGIN, json={"auth": None, "errors": []})
+
+    message = await startup_error(make_client)
+
+    assert "AppRole login" in message
+    assert VAULT in message
+
+
+@pytest.mark.parametrize("body", [{"data": None}, {"data": {"data": None}}])
+async def test_null_data_in_the_kv_response_fails_startup(make_client, fake, body):
+    fake.post(LOGIN, login_ok())
+    fake.get(KV_READ, json=body)
+
+    message = await startup_error(make_client)
+
+    assert "secret/hevy-mcp" in message
+    assert VAULT in message
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_blank_hevy_api_key_is_ignored_in_favour_of_vault(make_client, vault, blank):
+    async with make_client(**VAULT_ENV | {"HEVY_API_KEY": blank}) as client:
+        await client.call_tool("get_user_info", {})
+
+    assert vault.requests[0].url == LOGIN
+    assert vault.hevy_requests()[0].headers["api-key"] == VAULT_HEVY_KEY
+
+
+async def test_blank_hevy_api_key_without_vault_fails_startup(make_client, fake):
+    message = await startup_error(make_client, HEVY_API_KEY=" ", VAULT_ADDR=None)
+
+    assert "HEVY_API_KEY" in message
+    assert "VAULT_ADDR" in message
+    assert fake.requests == []

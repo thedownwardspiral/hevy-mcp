@@ -13,14 +13,28 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Add an entry per package manager the repo uses, for example:
-  #
-  # - package-ecosystem: pip        # or npm, docker, gomod, cargo, ...
-  #   directory: /
-  #   schedule:
-  #     interval: weekly
-  #   cooldown:
-  #     default-days: 7
-  #   groups:
-  #     dependencies:
-  #       patterns: ["*"]
+  # Python dependencies in pyproject.toml and uv.lock.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      dependencies:
+        patterns: ["*"]
+    # FastMCP is pinned to 4.x; a new major needs a deliberate upgrade.
+    ignore:
+      - dependency-name: fastmcp
+        update-types: ["version-update:semver-major"]
+
+  # Base images in the Dockerfile, pinned by digest.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]

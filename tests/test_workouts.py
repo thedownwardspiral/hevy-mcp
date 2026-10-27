@@ -309,3 +309,68 @@ async def test_training_summary_counts_unknown_templates_as_unknown(client, fake
     )
 
     assert result.structured_content["muscle_groups"] == [{"muscle_group": "unknown", "sets": 4}]
+
+
+def page_without_count(workouts: list[dict], number: int) -> dict:
+    return {"page": number, "page_count": None, "workouts": workouts}
+
+
+async def test_range_without_page_count_pages_until_a_short_page(client, fake):
+    full = [workout_at(f"a{n}", f"2024-06-20T{n:02d}:00:00Z") for n in range(10)]
+    short = [workout_at(f"b{n}", f"2024-06-10T{n:02d}:00:00Z") for n in range(3)]
+    fake.get("/v1/workouts", json=page_without_count(full, 1), params={"page": 1})
+    fake.get("/v1/workouts", json=page_without_count(short, 2), params={"page": 2})
+
+    result = await client.call_tool(
+        "get_workouts_in_range", {"start_date": "2024-06-01", "end_date": "2024-06-30"}
+    )
+
+    assert len(result.structured_content["workouts"]) == 13
+    assert result.structured_content["truncated"] is False
+    assert [r.url.params["page"] for r in fake.hevy_requests()] == ["1", "2"]
+
+
+async def test_range_without_page_count_stops_at_an_empty_page(client, fake):
+    full = [workout_at(f"a{n}", f"2024-06-20T{n:02d}:00:00Z") for n in range(10)]
+    fake.get("/v1/workouts", json=page_without_count(full, 1), params={"page": 1})
+    fake.get("/v1/workouts", json={"page": 2, "workouts": []}, params={"page": 2})
+
+    result = await client.call_tool(
+        "get_workouts_in_range", {"start_date": "2024-06-01", "end_date": "2024-06-30"}
+    )
+
+    assert len(result.structured_content["workouts"]) == 10
+    assert result.structured_content["truncated"] is False
+
+
+async def test_range_without_page_count_flags_truncation_at_the_cap(make_client, fake):
+    for number in (1, 2):
+        full = [
+            workout_at(f"p{number}-{n}", f"2024-06-2{number}T{n:02d}:00:00Z") for n in range(10)
+        ]
+        fake.get("/v1/workouts", json=page_without_count(full, number), params={"page": number})
+
+    async with make_client(HEVY_RANGE_MAX_PAGES="2") as client:
+        result = await client.call_tool(
+            "get_workouts_in_range", {"start_date": "2024-06-01", "end_date": "2024-06-30"}
+        )
+
+    assert len(result.structured_content["workouts"]) == 20
+    assert result.structured_content["truncated"] is True
+    assert len(fake.hevy_requests()) == 2
+
+
+async def test_training_summary_flags_truncated_templates(make_client, fake):
+    fake.get("/v1/workouts", json=page("workouts", [load("hevy/workout.json")]))
+    templates = load("hevy/exercise_templates.json")["exercise_templates"]
+    fake.get(
+        "/v1/exercise_templates",
+        json=page("exercise_templates", (templates * 25)[:100], page_count=3),
+    )
+
+    async with make_client(HEVY_RANGE_MAX_PAGES="1") as client:
+        result = await client.call_tool(
+            "get_training_summary", {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+        )
+
+    assert result.structured_content["truncated"] is True
