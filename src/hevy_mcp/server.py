@@ -18,13 +18,20 @@ from starlette.responses import JSONResponse
 
 from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
-from hevy_mcp.dates import parse_bound, parse_optional_range, parse_range
+from hevy_mcp.dates import parse_bound, parse_day, parse_optional_range, parse_range
 from hevy_mcp.hevy import MAX_PAGE_SIZE, MAX_TEMPLATE_PAGE_SIZE, HevyClient, HevyError
 from hevy_mcp.models import (
+    BodyMeasurement,
+    BodyMeasurementPage,
+    BodyMeasurementRange,
     ExerciseHistory,
     ExerciseTemplate,
     ExerciseTemplatePage,
     ExerciseTemplateSearch,
+    Routine,
+    RoutineFolder,
+    RoutineFolderPage,
+    RoutinePage,
     TrainingSummary,
     UserInfo,
     Workout,
@@ -248,6 +255,63 @@ def create_server(
         exercise_template_id with search_exercise_templates."""
         start, end = parse_optional_range(start_date, end_date, settings.zone)
         return await state.hevy.exercise_history(exercise_template_id, start, end)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_body_measurements(
+        page: Page = 1, page_size: PageSize = MAX_PAGE_SIZE
+    ) -> BodyMeasurementPage:
+        """List body measurements one page at a time: weight_kg, lean_mass_kg,
+        fat_percent and circumferences in cm. For a period, prefer
+        get_body_measurements_in_range."""
+        return await state.hevy.body_measurements(page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_body_measurement(
+        date: Annotated[str, Field(description="The day, as YYYY-MM-DD.")],
+    ) -> BodyMeasurement:
+        """Get the body measurement logged on one day, e.g. "what did I weigh on
+        1 June?"."""
+        return await state.hevy.body_measurement(parse_day(date, "date"))
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_body_measurements_in_range(
+        start_date: StartDate, end_date: EndDate
+    ) -> BodyMeasurementRange:
+        """Get every body measurement between two dates, newest first, for trends
+        such as weight change over a period. If truncated is true, the search hit
+        its page limit before reaching start_date: narrow the range."""
+        period = parse_range(start_date, end_date, settings.zone)
+        found, truncated = await state.hevy.body_measurements_in_range(period, settings.zone)
+        return BodyMeasurementRange(
+            start_date=period.start.isoformat(),
+            end_date=period.end.isoformat(),
+            body_measurements=found,
+            truncated=truncated,
+        )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_routines(page: Page = 1, page_size: PageSize = MAX_PAGE_SIZE) -> RoutinePage:
+        """List the user's routines (planned workouts) with their exercises and
+        planned sets, one page at a time."""
+        return await state.hevy.routines(page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_routine(routine_id: str) -> Routine:
+        """Get one routine: its folder, exercises, rest times and planned sets,
+        including rep ranges. Compare with workouts to see plan versus actual."""
+        return await state.hevy.routine(routine_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_routine_folders(
+        page: Page = 1, page_size: PageSize = MAX_PAGE_SIZE
+    ) -> RoutineFolderPage:
+        """List the folders the user groups routines into, one page at a time."""
+        return await state.hevy.routine_folders(page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_routine_folder(folder_id: int) -> RoutineFolder:
+        """Get one routine folder by its numeric id (a routine's folder_id)."""
+        return await state.hevy.routine_folder(folder_id)
 
     return mcp
 

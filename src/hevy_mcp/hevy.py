@@ -9,7 +9,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from datetime import datetime, tzinfo
+from datetime import date, datetime, tzinfo
 from typing import Any
 from urllib.parse import quote
 
@@ -18,9 +18,15 @@ from pydantic import BaseModel, SecretStr
 
 from hevy_mcp.dates import DateRange, parse_timestamp, to_hevy
 from hevy_mcp.models import (
+    BodyMeasurement,
+    BodyMeasurementPage,
     ExerciseHistory,
     ExerciseTemplate,
     ExerciseTemplatePage,
+    Routine,
+    RoutineFolder,
+    RoutineFolderPage,
+    RoutinePage,
     UserInfo,
     Workout,
     WorkoutCount,
@@ -234,6 +240,49 @@ class HevyClient:
             params=params,
         )
         return ExerciseHistory.model_validate({"exercise_template_id": template_id} | body)
+
+    async def body_measurements(self, page: int, page_size: int) -> BodyMeasurementPage:
+        return await self._page(
+            BodyMeasurementPage, "/v1/body_measurements", page, page_size, MAX_PAGE_SIZE
+        )
+
+    async def body_measurement(self, day: date) -> BodyMeasurement:
+        body = await self._get(
+            f"/v1/body_measurements/{day.isoformat()}",
+            what=f"a body measurement for {day.isoformat()}",
+        )
+        return BodyMeasurement.model_validate(body)
+
+    async def body_measurements_in_range(
+        self, period: DateRange, zone: tzinfo
+    ) -> tuple[list[BodyMeasurement], bool]:
+        return await self._collect_range(
+            BodyMeasurementPage,
+            "/v1/body_measurements",
+            "body_measurements",
+            period,
+            lambda m: parse_timestamp(m.date, zone),
+        )
+
+    async def routines(self, page: int, page_size: int) -> RoutinePage:
+        return await self._page(RoutinePage, "/v1/routines", page, page_size, MAX_PAGE_SIZE)
+
+    async def routine(self, routine_id: str) -> Routine:
+        body = await self._get(
+            f"/v1/routines/{_segment(routine_id)}", what=f"routine {routine_id!r}"
+        )
+        return Routine.model_validate(body.get("routine", body))
+
+    async def routine_folders(self, page: int, page_size: int) -> RoutineFolderPage:
+        return await self._page(
+            RoutineFolderPage, "/v1/routine_folders", page, page_size, MAX_PAGE_SIZE
+        )
+
+    async def routine_folder(self, folder_id: int) -> RoutineFolder:
+        body = await self._get(
+            f"/v1/routine_folders/{folder_id}", what=f"routine folder {folder_id}"
+        )
+        return RoutineFolder.model_validate(body)
 
     async def all_exercise_templates(self) -> list[ExerciseTemplate]:
         """Every exercise template, cached briefly because they rarely change."""
