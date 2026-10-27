@@ -6,7 +6,15 @@ from hevy_mcp.server import create_server
 
 from .conftest import TEST_API_KEY
 
-EXPECTED_TOOLS = {"get_user_info"}
+EXPECTED_TOOLS = {
+    "get_user_info",
+    "list_workouts",
+    "get_workout",
+    "get_workout_count",
+    "get_workouts_in_range",
+    "get_training_summary",
+    "list_workout_events",
+}
 
 
 async def test_every_tool_is_listed_and_read_only(client):

@@ -7,12 +7,25 @@ with jittered backoff, and mapping status codes to the domain errors below.
 import asyncio
 import logging
 import random
+import time
+from collections.abc import Callable
+from datetime import datetime, tzinfo
 from typing import Any
+from urllib.parse import quote
 
 import httpx
-from pydantic import SecretStr
+from pydantic import BaseModel, SecretStr
 
-from hevy_mcp.models import UserInfo
+from hevy_mcp.dates import DateRange, parse_timestamp, to_hevy
+from hevy_mcp.models import (
+    ExerciseTemplate,
+    ExerciseTemplatePage,
+    UserInfo,
+    Workout,
+    WorkoutCount,
+    WorkoutEventPage,
+    WorkoutPage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +61,18 @@ class HevyRequestError(HevyError):
         super().__init__(f"Hevy rejected the request (HTTP {status}): {detail}")
 
 
+# Hevy's maximum page sizes. Larger requests are capped rather than rejected.
+MAX_PAGE_SIZE = 10
+MAX_TEMPLATE_PAGE_SIZE = 100
+
+
 def _is_transient(status: int) -> bool:
     return status == 429 or status >= 500
+
+
+def _segment(value: str) -> str:
+    """Escape an id for use as one path segment, so it can't change the path."""
+    return quote(value, safe="")
 
 
 class HevyClient:
@@ -60,11 +83,18 @@ class HevyClient:
         *,
         max_retries: int,
         backoff_seconds: float,
+        max_pages: int,
+        template_cache_seconds: float,
     ) -> None:
         self._http = http
         self._api_key = api_key
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
+        self._max_pages = max_pages
+        self._template_cache_seconds = template_cache_seconds
+        self._templates: list[ExerciseTemplate] | None = None
+        self._templates_fetched_at = 0.0
+        self._templates_lock = asyncio.Lock()
 
     async def _get(self, path: str, *, what: str, params: dict[str, Any] | None = None) -> Any:
         attempts = self._max_retries + 1
@@ -105,9 +135,94 @@ class HevyClient:
                 await asyncio.sleep(delay)
         raise HevyUnavailable(reason, attempts)
 
+    async def _page[M: BaseModel](
+        self, model: type[M], path: str, page: int, page_size: int, limit: int, **params: Any
+    ) -> M:
+        params |= {"page": page, "pageSize": min(page_size, limit)}
+        return model.model_validate(await self._get(path, what=f"page {page}", params=params))
+
+    async def _collect_range[I](
+        self,
+        model: type[BaseModel],
+        path: str,
+        items: str,
+        period: DateRange,
+        when: Callable[[I], datetime | None],
+    ) -> tuple[list[I], bool]:
+        """Page newest first, keeping items in ``period``, until a page reaches
+        past its start. Returns the items and whether the page cap cut it short."""
+        found: list[I] = []
+        for number in range(1, self._max_pages + 1):
+            page = await self._page(model, path, number, MAX_PAGE_SIZE, MAX_PAGE_SIZE)
+            batch: list[I] = getattr(page, items)
+            moments = [when(item) for item in batch]
+            found += [item for item, moment in zip(batch, moments, strict=True) if moment in period]
+            known = [m for m in moments if m is not None]
+            if (
+                not batch
+                or number >= (page.page_count or 0)
+                or (known and min(known) < period.start)
+            ):
+                return found, False
+        return found, True
+
     async def user_info(self) -> UserInfo:
         body = await self._get("/v1/user/info", what="the Hevy user")
         return UserInfo.model_validate(body.get("data", body))
+
+    async def workouts(self, page: int, page_size: int) -> WorkoutPage:
+        return await self._page(WorkoutPage, "/v1/workouts", page, page_size, MAX_PAGE_SIZE)
+
+    async def workout(self, workout_id: str) -> Workout:
+        body = await self._get(
+            f"/v1/workouts/{_segment(workout_id)}", what=f"workout {workout_id!r}"
+        )
+        return Workout.model_validate(body)
+
+    async def workout_count(self) -> WorkoutCount:
+        return WorkoutCount.model_validate(
+            await self._get("/v1/workouts/count", what="the workout count")
+        )
+
+    async def workout_events(
+        self, since: datetime | None, page: int, page_size: int
+    ) -> WorkoutEventPage:
+        params = {"since": to_hevy(since)} if since else {}
+        return await self._page(
+            WorkoutEventPage, "/v1/workouts/events", page, page_size, MAX_PAGE_SIZE, **params
+        )
+
+    async def workouts_in_range(
+        self, period: DateRange, zone: tzinfo
+    ) -> tuple[list[Workout], bool]:
+        return await self._collect_range(
+            WorkoutPage,
+            "/v1/workouts",
+            "workouts",
+            period,
+            lambda w: parse_timestamp(w.start_time, zone),
+        )
+
+    async def all_exercise_templates(self) -> list[ExerciseTemplate]:
+        """Every exercise template, cached briefly because they rarely change."""
+        async with self._templates_lock:
+            age = time.monotonic() - self._templates_fetched_at
+            if self._templates is None or age > self._template_cache_seconds:
+                templates: list[ExerciseTemplate] = []
+                for number in range(1, self._max_pages + 1):
+                    page = await self._page(
+                        ExerciseTemplatePage,
+                        "/v1/exercise_templates",
+                        number,
+                        MAX_TEMPLATE_PAGE_SIZE,
+                        MAX_TEMPLATE_PAGE_SIZE,
+                    )
+                    templates += page.exercise_templates
+                    if not page.exercise_templates or number >= (page.page_count or 0):
+                        break
+                self._templates = templates
+                self._templates_fetched_at = time.monotonic()
+            return self._templates
 
 
 def _error_detail(response: httpx.Response) -> str:
