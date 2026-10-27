@@ -1,5 +1,6 @@
 """Settings read from the environment and validated at startup."""
 
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator
@@ -18,6 +19,20 @@ class Settings(BaseSettings):
     # Most pages a range query walks before it stops and reports truncation.
     hevy_range_max_pages: int = Field(50, ge=1)
     hevy_template_cache_seconds: float = Field(600, ge=0)
+
+    # Vault, used when HEVY_API_KEY is not set. VAULT_ADDR has no default so
+    # that no real hostname is committed. Each AppRole credential can instead
+    # be read from a file (the _FILE variant), for Docker secrets.
+    vault_addr: str | None = None
+    vault_role_id: SecretStr | None = None
+    vault_role_id_file: Path | None = None
+    vault_secret_id: SecretStr | None = None
+    vault_secret_id_file: Path | None = None
+    vault_cacert: Path | None = None
+    vault_approle_mount: str = "approle"
+    vault_kv_mount: str = "secret"
+    vault_kv_path: str = "hevy-mcp"
+    vault_timeout_seconds: float = Field(10.0, gt=0)
 
     log_level: str = "INFO"
     mcp_host: str = "0.0.0.0"
