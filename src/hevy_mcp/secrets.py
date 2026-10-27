@@ -24,8 +24,10 @@ class SecretSourceError(Exception):
 async def resolve_api_key(
     settings: Settings, transport: httpx.AsyncBaseTransport | None
 ) -> SecretStr:
-    if settings.hevy_api_key is not None:
-        return settings.hevy_api_key
+    # A blank HEVY_API_KEY (e.g. "HEVY_API_KEY=" left in an env file) counts as unset.
+    override = settings.hevy_api_key.get_secret_value().strip() if settings.hevy_api_key else ""
+    if override:
+        return SecretStr(override)
     if not settings.vault_addr:
         raise SecretSourceError(
             "No Hevy API key: set VAULT_ADDR and the AppRole credentials to read it from "
@@ -86,8 +88,8 @@ async def _read_from_vault(
                 f"Vault at {addr} denied the AppRole login (HTTP {login.status_code}): "
                 "check the role ID, the secret ID and its TTL."
             )
-        token = _json(login, addr, "the AppRole login").get("auth", {}).get("client_token")
-        if not login.is_success or not token:
+        token = _object(_json(login, addr, "the AppRole login"), "auth").get("client_token")
+        if not login.is_success or not isinstance(token, str) or not token:
             raise SecretSourceError(
                 f"The AppRole login at Vault {addr} failed (HTTP {login.status_code})."
             )
@@ -111,7 +113,7 @@ async def _read_from_vault(
             raise SecretSourceError(
                 f"Reading {secret} from Vault at {addr} failed (HTTP {read.status_code})."
             )
-        data = _json(read, addr, f"reading {secret}").get("data", {}).get("data") or {}
+        data = _object(_object(_json(read, addr, f"reading {secret}"), "data"), "data")
         api_key = data.get(API_KEY_FIELD)
         if not isinstance(api_key, str) or not api_key:
             raise SecretSourceError(
@@ -139,3 +141,9 @@ def _json(response: httpx.Response, addr: str, action: str) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise SecretSourceError(f"Vault at {addr} sent an unexpected response to {action}.")
     return body
+
+
+def _object(body: dict[str, Any], key: str) -> dict[str, Any]:
+    """``body[key]`` if it is an object, else empty: Vault may send ``null``."""
+    value = body.get(key)
+    return value if isinstance(value, dict) else {}

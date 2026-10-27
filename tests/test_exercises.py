@@ -143,3 +143,53 @@ async def test_exercise_history_rejects_a_bad_date(client, fake):
         await client.call_tool(
             "get_exercise_history", {"exercise_template_id": "05293BCA", "start_date": "June"}
         )
+
+
+def template(n: int, title: str) -> dict:
+    return load("hevy/exercise_template.json") | {"id": f"T{n:04d}", "title": title}
+
+
+async def test_search_without_page_count_pages_until_a_short_page(client, fake):
+    full = [template(n, f"Curl {n}") for n in range(99)] + [template(99, "Bench Press (Barbell)")]
+    fake.get(
+        "/v1/exercise_templates",
+        json={"page": 1, "page_count": None, "exercise_templates": full},
+        params={"page": 1},
+    )
+    fake.get(
+        "/v1/exercise_templates",
+        json={"page": 2, "exercise_templates": [template(100, "Incline Bench Press")]},
+        params={"page": 2},
+    )
+
+    result = await client.call_tool("search_exercise_templates", {"query": "bench"})
+
+    assert [t["id"] for t in result.structured_content["exercise_templates"]] == [
+        "T0099",
+        "T0100",
+    ]
+    assert result.structured_content["truncated"] is False
+    assert [r.url.params["page"] for r in fake.hevy_requests()] == ["1", "2"]
+
+
+async def test_search_flags_truncation_at_the_page_cap(make_client, fake):
+    full = [template(n, f"Bench {n}") for n in range(100)]
+    fake.get(
+        "/v1/exercise_templates",
+        json={"page": 1, "page_count": 5, "exercise_templates": full},
+    )
+
+    async with make_client(HEVY_RANGE_MAX_PAGES="1") as client:
+        result = await client.call_tool("search_exercise_templates", {"query": "bench"})
+
+    assert len(result.structured_content["exercise_templates"]) == 100
+    assert result.structured_content["truncated"] is True
+    assert len(fake.hevy_requests()) == 1
+
+
+async def test_complete_search_is_not_truncated(client, fake):
+    fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates.json"))
+
+    result = await client.call_tool("search_exercise_templates", {"query": "squat"})
+
+    assert result.structured_content["truncated"] is False

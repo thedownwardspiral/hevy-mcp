@@ -77,6 +77,14 @@ def _is_transient(status: int) -> bool:
     return status == 429 or status >= 500
 
 
+def _is_last_page(number: int, page_count: int | None, items: int, page_size: int) -> bool:
+    """Whether page ``number`` is the last. Without a page_count, a page that
+    comes back short (fewer items than the page size) is the last one."""
+    if page_count is None:
+        return items < page_size
+    return number >= page_count
+
+
 def _segment(value: str) -> str:
     """Escape an id for use as one path segment, so it can't change the path."""
     return quote(value, safe="")
@@ -99,7 +107,7 @@ class HevyClient:
         self._backoff_seconds = backoff_seconds
         self._max_pages = max_pages
         self._template_cache_seconds = template_cache_seconds
-        self._templates: list[ExerciseTemplate] | None = None
+        self._templates: tuple[list[ExerciseTemplate], bool] | None = None
         self._templates_fetched_at = 0.0
         self._templates_lock = asyncio.Lock()
 
@@ -167,7 +175,7 @@ class HevyClient:
             known = [m for m in moments if m is not None]
             if (
                 not batch
-                or number >= (page.page_count or 0)
+                or _is_last_page(number, page.page_count, len(batch), MAX_PAGE_SIZE)
                 or (known and min(known) < period.start)
             ):
                 return found, False
@@ -284,26 +292,33 @@ class HevyClient:
         )
         return RoutineFolder.model_validate(body)
 
-    async def all_exercise_templates(self) -> list[ExerciseTemplate]:
-        """Every exercise template, cached briefly because they rarely change."""
+    async def all_exercise_templates(self) -> tuple[list[ExerciseTemplate], bool]:
+        """Every exercise template, cached briefly because they rarely change.
+        Returns the templates and whether the page cap cut the walk short."""
         async with self._templates_lock:
             age = time.monotonic() - self._templates_fetched_at
             if self._templates is None or age > self._template_cache_seconds:
-                templates: list[ExerciseTemplate] = []
-                for number in range(1, self._max_pages + 1):
-                    page = await self._page(
-                        ExerciseTemplatePage,
-                        "/v1/exercise_templates",
-                        number,
-                        MAX_TEMPLATE_PAGE_SIZE,
-                        MAX_TEMPLATE_PAGE_SIZE,
-                    )
-                    templates += page.exercise_templates
-                    if not page.exercise_templates or number >= (page.page_count or 0):
-                        break
-                self._templates = templates
+                self._templates = await self._walk_templates()
                 self._templates_fetched_at = time.monotonic()
             return self._templates
+
+    async def _walk_templates(self) -> tuple[list[ExerciseTemplate], bool]:
+        templates: list[ExerciseTemplate] = []
+        for number in range(1, self._max_pages + 1):
+            page = await self._page(
+                ExerciseTemplatePage,
+                "/v1/exercise_templates",
+                number,
+                MAX_TEMPLATE_PAGE_SIZE,
+                MAX_TEMPLATE_PAGE_SIZE,
+            )
+            batch = page.exercise_templates
+            templates += batch
+            if not batch or _is_last_page(
+                number, page.page_count, len(batch), MAX_TEMPLATE_PAGE_SIZE
+            ):
+                return templates, False
+        return templates, True
 
 
 def _error_detail(response: httpx.Response) -> str:

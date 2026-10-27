@@ -187,8 +187,16 @@ def create_server(
         top weight, and sets per primary muscle group. Warm-up sets are excluded."""
         period = parse_range(start_date, end_date, settings.zone)
         workouts, truncated = await state.hevy.workouts_in_range(period, settings.zone)
-        templates = await state.hevy.all_exercise_templates() if workouts else []
-        return training_summary(workouts, templates, period, settings.zone, truncated=truncated)
+        templates, templates_truncated = (
+            await state.hevy.all_exercise_templates() if workouts else ([], False)
+        )
+        return training_summary(
+            workouts,
+            templates,
+            period,
+            settings.zone,
+            truncated=truncated or templates_truncated,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def list_workout_events(
@@ -238,10 +246,11 @@ def create_server(
         needle = query.strip().casefold()
         if not needle:
             raise ToolError("query must not be blank.")
-        templates = await state.hevy.all_exercise_templates()
+        templates, truncated = await state.hevy.all_exercise_templates()
         return ExerciseTemplateSearch(
             query=query,
             exercise_templates=[t for t in templates if needle in (t.title or "").casefold()],
+            truncated=truncated,
         )
 
     @mcp.tool(annotations=READ_ONLY)

@@ -23,7 +23,8 @@ env:
 
 jobs:
   test:
-    uses: $/.github/workflows/test.yml
+    # The workspace-relative form, not the newer `$/` self-repository syntax.
+    uses: ./.github/workflows/test.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
 
