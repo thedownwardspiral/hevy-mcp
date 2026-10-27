@@ -1,0 +1,7 @@
+{
+  "exercise_history": [
+    {"workout_id": "b459cba5-cd6d-463c-abd6-54f8eafcadcb", "workout_title": "Morning Workout 💪", "workout_start_time": "2024-06-03T07:00:00Z", "workout_end_time": "2024-06-03T08:00:00Z", "exercise_template_id": "05293BCA", "weight_kg": 60, "reps": 10, "distance_meters": null, "duration_seconds": null, "rpe": null, "custom_metric": null, "set_type": "warmup"},
+    {"workout_id": "b459cba5-cd6d-463c-abd6-54f8eafcadcb", "workout_title": "Morning Workout 💪", "workout_start_time": "2024-06-03T07:00:00Z", "workout_end_time": "2024-06-03T08:00:00Z", "exercise_template_id": "05293BCA", "weight_kg": 100, "reps": 8, "distance_meters": null, "duration_seconds": null, "rpe": 8.5, "custom_metric": null, "set_type": "normal"},
+    {"workout_id": "efe6801c-4aee-4959-bcdd-fca3f272821b", "workout_title": "Evening Workout", "workout_start_time": "2024-06-05T18:00:00Z", "workout_end_time": "2024-06-05T18:45:00Z", "exercise_template_id": "05293BCA", "weight_kg": 102.5, "reps": 5, "distance_meters": null, "duration_seconds": null, "rpe": 9, "custom_metric": null, "set_type": "dropset"}
+  ]
+}

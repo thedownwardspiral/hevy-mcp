@@ -40,12 +40,20 @@ def parse_bound(value: str, name: str, zone: tzinfo, *, end: bool = False) -> da
     return moment if moment.tzinfo else moment.replace(tzinfo=zone)
 
 
-def parse_range(start_date: str, end_date: str, zone: tzinfo) -> DateRange:
-    start = parse_bound(start_date, "start_date", zone)
-    end = parse_bound(end_date, "end_date", zone, end=True)
-    if end < start:
+def parse_optional_range(
+    start_date: str | None, end_date: str | None, zone: tzinfo
+) -> tuple[datetime | None, datetime | None]:
+    """Parse a range whose ends may each be left open."""
+    start = parse_bound(start_date, "start_date", zone) if start_date is not None else None
+    end = parse_bound(end_date, "end_date", zone, end=True) if end_date is not None else None
+    if start and end and end < start:
         raise ToolError(f"end_date ({end_date}) is before start_date ({start_date}).")
-    return DateRange(start, end)
+    return start, end
+
+
+def parse_range(start_date: str, end_date: str, zone: tzinfo) -> DateRange:
+    start, end = parse_optional_range(start_date, end_date, zone)
+    return DateRange(start, end)  # type: ignore[arg-type]  # both given, so both parsed
 
 
 def parse_timestamp(value: str | None, zone: tzinfo) -> datetime | None:

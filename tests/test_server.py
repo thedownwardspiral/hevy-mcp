@@ -14,6 +14,10 @@ EXPECTED_TOOLS = {
     "get_workouts_in_range",
     "get_training_summary",
     "list_workout_events",
+    "list_exercise_templates",
+    "get_exercise_template",
+    "search_exercise_templates",
+    "get_exercise_history",
 }
 
 

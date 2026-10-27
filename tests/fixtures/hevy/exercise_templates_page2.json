@@ -1,0 +1,9 @@
+{
+  "page": 2,
+  "page_count": 2,
+  "exercise_templates": [
+    {"id": "3601968B", "title": "Incline Bench Press (Dumbbell)", "type": "weight_reps", "primary_muscle_group": "chest", "secondary_muscle_groups": ["shoulders", "triceps"], "equipment": "dumbbell", "is_custom": false},
+    {"id": "243710DE", "title": "Treadmill", "type": "distance_duration", "primary_muscle_group": "cardio", "secondary_muscle_groups": [], "equipment": "machine", "is_custom": false},
+    {"id": "b459cba5-cd6d-463c-abd6-54f8eafcadcb", "title": "Landmine Press", "type": "weight_reps", "primary_muscle_group": "shoulders", "secondary_muscle_groups": ["triceps"], "equipment": "plate", "is_custom": true}
+  ]
+}

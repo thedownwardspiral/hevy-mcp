@@ -18,9 +18,13 @@ from starlette.responses import JSONResponse
 
 from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
-from hevy_mcp.dates import parse_bound, parse_range
-from hevy_mcp.hevy import MAX_PAGE_SIZE, HevyClient, HevyError
+from hevy_mcp.dates import parse_bound, parse_optional_range, parse_range
+from hevy_mcp.hevy import MAX_PAGE_SIZE, MAX_TEMPLATE_PAGE_SIZE, HevyClient, HevyError
 from hevy_mcp.models import (
+    ExerciseHistory,
+    ExerciseTemplate,
+    ExerciseTemplatePage,
+    ExerciseTemplateSearch,
     TrainingSummary,
     UserInfo,
     Workout,
@@ -45,6 +49,12 @@ StartDate = Annotated[
         description="First day or moment to include, ISO 8601 (2024-06-01 or "
         "2024-06-01T18:30:00Z). Dates without an offset use the server's timezone."
     ),
+]
+OptionalStartDate = Annotated[
+    str | None, Field(description="Optional first day or moment to include, ISO 8601.")
+]
+OptionalEndDate = Annotated[
+    str | None, Field(description="Optional last day or moment to include, ISO 8601.")
 ]
 EndDate = Annotated[
     str,
@@ -186,6 +196,58 @@ def create_server(
         "deleted" events its id and deleted_at. Useful for "what changed recently?"."""
         moment = parse_bound(since, "since", settings.zone) if since else None
         return await state.hevy.workout_events(moment, page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_exercise_templates(
+        page: Page = 1,
+        page_size: Annotated[
+            int,
+            Field(
+                ge=1,
+                description=f"Items per page; values above {MAX_TEMPLATE_PAGE_SIZE} are capped.",
+            ),
+        ] = MAX_TEMPLATE_PAGE_SIZE,
+    ) -> ExerciseTemplatePage:
+        """List exercise templates (Hevy's built-in and the user's custom exercises)
+        with their primary and secondary muscle groups and equipment. To find one by
+        name, use search_exercise_templates instead."""
+        return await state.hevy.exercise_templates(page, page_size)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_exercise_template(exercise_template_id: str) -> ExerciseTemplate:
+        """Get one exercise template: title, type, primary and secondary muscle
+        groups, equipment and whether it is a custom exercise."""
+        return await state.hevy.exercise_template(exercise_template_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def search_exercise_templates(
+        query: Annotated[
+            str,
+            Field(description='Part of the exercise name, e.g. "bench press". Case-insensitive.'),
+        ],
+    ) -> ExerciseTemplateSearch:
+        """Find exercise templates whose title contains the query, ignoring case.
+        Use it to get the exercise_template_id that get_exercise_history needs."""
+        needle = query.strip().casefold()
+        if not needle:
+            raise ToolError("query must not be blank.")
+        templates = await state.hevy.all_exercise_templates()
+        return ExerciseTemplateSearch(
+            query=query,
+            exercise_templates=[t for t in templates if needle in (t.title or "").casefold()],
+        )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def get_exercise_history(
+        exercise_template_id: str,
+        start_date: OptionalStartDate = None,
+        end_date: OptionalEndDate = None,
+    ) -> ExerciseHistory:
+        """Get every logged set of one exercise, with weight_kg, reps,
+        rpe, set_type and the workout's date, to track progress on a lift. Find the
+        exercise_template_id with search_exercise_templates."""
+        start, end = parse_optional_range(start_date, end_date, settings.zone)
+        return await state.hevy.exercise_history(exercise_template_id, start, end)
 
     return mcp
 

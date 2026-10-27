@@ -1,0 +1,9 @@
+{
+  "page": 1,
+  "page_count": 2,
+  "exercise_templates": [
+    {"id": "05293BCA", "title": "Bench Press (Barbell)", "type": "weight_reps", "primary_muscle_group": "chest", "secondary_muscle_groups": ["triceps", "shoulders"], "equipment": "barbell", "is_custom": false},
+    {"id": "D04AC939", "title": "Squat (Barbell)", "type": "weight_reps", "primary_muscle_group": "quadriceps", "secondary_muscle_groups": ["glutes", "hamstrings", "lower_back"], "equipment": "barbell", "is_custom": false},
+    {"id": "1B2B1E7C", "title": "Pull Up", "type": "bodyweight_reps", "primary_muscle_group": "lats", "secondary_muscle_groups": ["biceps", "upper_back"], "equipment": "none", "is_custom": false}
+  ]
+}

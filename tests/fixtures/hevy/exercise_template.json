@@ -1,0 +1,9 @@
+{
+  "id": "05293BCA",
+  "title": "Bench Press (Barbell)",
+  "type": "weight_reps",
+  "primary_muscle_group": "chest",
+  "secondary_muscle_groups": ["triceps", "shoulders"],
+  "equipment": "barbell",
+  "is_custom": false
+}
