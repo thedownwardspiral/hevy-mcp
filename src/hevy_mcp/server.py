@@ -16,6 +16,7 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from hevy_mcp.access import access_middleware
 from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
 from hevy_mcp.dates import parse_bound, parse_day, parse_optional_range, parse_range
@@ -338,5 +339,6 @@ def main() -> None:
         host=settings.mcp_host,
         port=settings.mcp_port,
         path="/mcp",
+        middleware=access_middleware(settings),
         show_banner=False,
     )

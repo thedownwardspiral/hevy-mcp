@@ -110,7 +110,8 @@ def make_client(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[...
 
     def _make(**env: str | None) -> Client:
         for key in list(os.environ):
-            if key.startswith(("HEVY_", "VAULT_", "MCP_")) or key in {"TZ", "LOG_LEVEL"}:
+            prefixed = key.startswith(("HEVY_", "VAULT_", "MCP_", "CF_ACCESS_"))
+            if prefixed or key in {"TZ", "LOG_LEVEL"}:
                 monkeypatch.delenv(key)
         settings = {"HEVY_API_KEY": TEST_API_KEY, "HEVY_RETRY_BACKOFF_SECONDS": "0"} | env
         for key, value in settings.items():
