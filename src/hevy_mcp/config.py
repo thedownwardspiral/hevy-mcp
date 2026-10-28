@@ -1,14 +1,17 @@
 """Settings read from the environment and validated at startup."""
 
 from pathlib import Path
+from typing import Annotated, Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+    # Hidden inputs: a validation error would otherwise print every setting,
+    # credentials included.
+    model_config = SettingsConfigDict(env_file=None, extra="ignore", hide_input_in_errors=True)
 
     # Local-development override: when set, Vault is skipped.
     hevy_api_key: SecretStr | None = None
@@ -34,6 +37,13 @@ class Settings(BaseSettings):
     vault_kv_path: str = "hevy-mcp"
     vault_timeout_seconds: float = Field(10.0, gt=0)
 
+    # Cloudflare Access. With these set, every request except /health needs a
+    # valid Access JWT; without them the server is unauthenticated. They go
+    # together: setting only some of them stops startup.
+    cf_access_team_domain: str | None = None
+    cf_access_aud: str | None = None
+    cf_access_allowed_emails: Annotated[frozenset[str], NoDecode] = frozenset()
+
     log_level: str = "INFO"
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8000
@@ -52,6 +62,47 @@ class Settings(BaseSettings):
     @classmethod
     def _upper_log_level(cls, value: str) -> str:
         return value.upper()
+
+    @field_validator("cf_access_team_domain", "cf_access_aud", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("cf_access_team_domain")
+    @classmethod
+    def _team_hostname(cls, value: str | None) -> str | None:
+        """Accept ``team.cloudflareaccess.com`` or its ``https://`` URL."""
+        if value is None:
+            return None
+        host = value.lower().removeprefix("https://").rstrip("/")
+        if not host or "/" in host or ":" in host:
+            raise ValueError(f"expected a hostname such as <team>.cloudflareaccess.com: {value!r}")
+        return host
+
+    @field_validator("cf_access_allowed_emails", mode="before")
+    @classmethod
+    def _split_emails(cls, value: Any) -> Any:
+        """A comma-separated list, compared without regard to case."""
+        if isinstance(value, str):
+            value = value.split(",")
+        return frozenset(email.strip().lower() for email in value if email.strip())
+
+    @model_validator(mode="after")
+    def _access_settings_together(self) -> Self:
+        given = {
+            "CF_ACCESS_TEAM_DOMAIN": self.cf_access_team_domain is not None,
+            "CF_ACCESS_AUD": self.cf_access_aud is not None,
+            "CF_ACCESS_ALLOWED_EMAILS": bool(self.cf_access_allowed_emails),
+        }
+        missing = [name for name, present in given.items() if not present]
+        if missing and len(missing) < len(given):
+            raise ValueError(
+                "Cloudflare Access needs CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and "
+                f"CF_ACCESS_ALLOWED_EMAILS together; missing: {', '.join(missing)}."
+            )
+        return self
 
     @property
     def zone(self) -> ZoneInfo:

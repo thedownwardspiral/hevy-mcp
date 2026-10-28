@@ -147,6 +147,9 @@ claude mcp add --transport http hevy https://hevy-mcp.home.example/mcp
 | `HEVY_MAX_RETRIES` / `HEVY_RETRY_BACKOFF_SECONDS` | `3` / `0.5` | Retries for 429, 5xx and timeouts |
 | `HEVY_RANGE_MAX_PAGES` | `50` | Most pages a range tool walks (500 workouts) |
 | `HEVY_TEMPLATE_CACHE_SECONDS` | `600` | How long exercise templates are cached |
+| `CF_ACCESS_TEAM_DOMAIN` | none | Cloudflare Access team domain, such as `<team>.cloudflareaccess.com`. With the next two settings, every request except `/health` needs a valid Access JWT. Without them the server is unauthenticated. See [ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md) |
+| `CF_ACCESS_AUD` | none | The Access application's AUD tag |
+| `CF_ACCESS_ALLOWED_EMAILS` | none | Comma-separated emails allowed to call the server (case-insensitive) |
 | `TZ` | `UTC` | Timezone for date-only inputs |
 | `LOG_LEVEL` | `INFO` | Log level for stdout |
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | Bind address inside the container |
