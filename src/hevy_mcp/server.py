@@ -326,6 +326,23 @@ def create_server(
     return mcp
 
 
+def http_options(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> dict[str, Any]:
+    """Keyword arguments for FastMCP's ``run`` and ``http_app``.
+
+    They add the Cloudflare Access check and, with ``MCP_ALLOWED_HOSTS`` set,
+    FastMCP's strict Host/Origin guard, which answers other hosts with 421.
+    """
+    options: dict[str, Any] = {"middleware": access_middleware(settings, transport)}
+    if settings.mcp_allowed_hosts:
+        options |= {
+            "host_origin_protection": True,
+            "allowed_hosts": list(settings.mcp_allowed_hosts),
+        }
+    return options
+
+
 def main() -> None:
     settings = Settings()
     logging.basicConfig(
@@ -339,6 +356,6 @@ def main() -> None:
         host=settings.mcp_host,
         port=settings.mcp_port,
         path="/mcp",
-        middleware=access_middleware(settings),
         show_banner=False,
+        **http_options(settings),
     )

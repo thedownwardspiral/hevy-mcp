@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8000
+    # Hostnames the server answers for (comma-separated). When set, requests
+    # with any other Host header are refused; loopback is always allowed, for
+    # the container's health check. Unset accepts any host.
+    mcp_allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     tz: str = "UTC"
 
     @field_validator("tz")
@@ -88,6 +92,24 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             value = value.split(",")
         return frozenset(email.strip().lower() for email in value if email.strip())
+
+    @field_validator("mcp_allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.split(",")
+        return tuple(host.strip().lower() for host in value if host.strip())
+
+    @field_validator("mcp_allowed_hosts")
+    @classmethod
+    def _hostnames_only(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
+        for host in hosts:
+            if "/" in host or host == "*":
+                raise ValueError(
+                    f"MCP_ALLOWED_HOSTS takes hostnames such as hevy-mcp.example.com, "
+                    f"not URLs or a bare '*': {host!r}"
+                )
+        return hosts
 
     @model_validator(mode="after")
     def _access_settings_together(self) -> Self:

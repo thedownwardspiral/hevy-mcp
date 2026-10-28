@@ -21,6 +21,8 @@ services:
       VAULT_KV_PATH: ${VAULT_KV_PATH:-hevy-mcp}
       TZ: ${TZ:-UTC}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Hostnames the server answers for; empty accepts any host.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
     secrets:
       - vault_role_id
       - vault_secret_id
