@@ -289,9 +289,11 @@ async def test_unreachable_certs_endpoint_fails_closed(make_app, fake):
     assert not fake.hevy_requests()
 
 
-async def test_without_access_settings_requests_need_no_token(make_app, hevy, caplog):
+# Blank is what compose.yml passes when .env leaves the settings empty.
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "blank"])
+async def test_without_access_settings_requests_need_no_token(make_app, hevy, caplog, value):
     caplog.set_level(logging.WARNING)
-    unset = dict.fromkeys(ACCESS_ENV)
+    unset = dict.fromkeys(ACCESS_ENV, value)
 
     app = make_app(**unset)
     result = await call_user_info(app, None)
