@@ -12,7 +12,7 @@ injectable transport as Hevy and Vault.
 
 import asyncio
 import logging
-import time
+from time import monotonic
 
 import httpx
 import jwt
@@ -32,6 +32,13 @@ LEEWAY_SECONDS = 30
 # An unknown key id refreshes the keys at most this often, so tokens with
 # made-up key ids can't make the server hammer the certs endpoint.
 REFRESH_COOLDOWN_SECONDS = 60
+# After a failed fetch, no other fetch for this long. Requests meanwhile are
+# answered at once, from the cached keys or with a 503, instead of queueing
+# behind another slow fetch.
+RETRY_AFTER_FAILURE_SECONDS = 5
+# Keys are refetched once they're this old, so a key Cloudflare withdraws
+# stops being trusted without a restart.
+KEYS_MAX_AGE_SECONDS = 3600
 CERTS_TIMEOUT_SECONDS = 10
 
 
@@ -59,7 +66,9 @@ class AccessVerifier:
         self._allowed_emails = allowed_emails
         self._transport = transport
         self._keys: dict[str, jwt.PyJWK] | None = None
-        self._refreshed_at: float | None = None
+        self._loaded_at = 0.0
+        self._failed_at: float | None = None
+        self._unknown_kid_refreshed_at: float | None = None
         self._lock = asyncio.Lock()
 
     async def verify(self, token: str) -> str:
@@ -89,23 +98,51 @@ class AccessVerifier:
 
     async def _key(self, kid: str) -> jwt.PyJWK:
         async with self._lock:
-            if self._keys is None:
-                self._keys = await self._fetch_keys()
-            if kid not in self._keys and self._may_refresh():
-                # Cloudflare rotates its signing keys; an unknown id may be a new one.
-                self._refreshed_at = time.monotonic()
-                self._keys = await self._fetch_keys()
+            fetched = False
+            if self._keys is None or monotonic() - self._loaded_at >= KEYS_MAX_AGE_SECONDS:
+                fetched = await self._refresh()
+            # Cloudflare rotates its signing keys, so an unknown id may be a new
+            # one; keys fetched just now are already current.
+            if (
+                not fetched
+                and self._keys is not None
+                and kid not in self._keys
+                and self._may_refresh_for_unknown_kid()
+            ):
+                self._unknown_kid_refreshed_at = monotonic()
+                await self._refresh()
             keys = self._keys
+        if keys is None:
+            raise AccessUnavailable("Cloudflare Access signing keys are not loaded yet.")
         key = keys.get(kid)
         if key is None:
             raise AccessDenied("token signed with an unknown key")
         return key
 
-    def _may_refresh(self) -> bool:
-        return (
-            self._refreshed_at is None
-            or time.monotonic() - self._refreshed_at >= REFRESH_COOLDOWN_SECONDS
-        )
+    def _may_refresh_for_unknown_kid(self) -> bool:
+        last = self._unknown_kid_refreshed_at
+        return last is None or monotonic() - last >= REFRESH_COOLDOWN_SECONDS
+
+    async def _refresh(self) -> bool:
+        """Refetch the keys and say whether that happened.
+
+        A failure keeps any cached keys and pauses fetching for a few seconds.
+        """
+        if (
+            self._failed_at is not None
+            and monotonic() - self._failed_at < RETRY_AFTER_FAILURE_SECONDS
+        ):
+            return False
+        try:
+            keys = await self._fetch_keys()
+        except AccessUnavailable as exc:
+            self._failed_at = monotonic()
+            if self._keys is None:
+                raise
+            logger.warning("%s Keeping the cached keys.", exc)
+            return False
+        self._keys, self._loaded_at, self._failed_at = keys, monotonic(), None
+        return True
 
     async def _fetch_keys(self) -> dict[str, jwt.PyJWK]:
         async with httpx.AsyncClient(

@@ -1,5 +1,6 @@
 """Cloudflare Access: every request except /health needs a valid Access JWT."""
 
+import asyncio
 import logging
 import os
 import time
@@ -15,6 +16,8 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from jwt.algorithms import RSAAlgorithm
 from pydantic import ValidationError
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from hevy_mcp.access import access_middleware
 from hevy_mcp.config import Settings
@@ -102,6 +105,26 @@ def hevy(fake: FakeHTTP) -> FakeHTTP:
     fake.get(CERTS, certs((KEY, KID)))
     fake.get("/v1/user/info", json=load("hevy/user_info.json"))
     return fake
+
+
+class Clock:
+    """Stands in for the verifier's monotonic clock, so tests can skip ahead."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    clock = Clock()
+    monkeypatch.setattr("hevy_mcp.access.monotonic", clock)
+    return clock
 
 
 def mcp_client(app: Any, assertion: str | None) -> Client:
@@ -264,14 +287,24 @@ async def test_rotated_key_is_picked_up_with_one_refresh(make_app, hevy):
 
 async def test_unknown_key_ids_cannot_force_repeated_refreshes(make_app, hevy):
     app = make_app()
+    assert await call_user_info(app, token())
     stranger = token(key=ROTATED_KEY, kid="kid-nobody-has")
 
     for _ in range(3):
         response = await post(app, **{"Cf-Access-Jwt-Assertion": stranger})
         assert response.status_code == 403
 
-    # The first request loads the keys and refreshes once for the unknown id.
+    # One load for the valid token, then one refresh for the unknown id.
     assert certs_fetches(hevy) == 2
+
+
+async def test_keys_loaded_for_a_request_are_not_refetched_for_its_unknown_id(make_app, hevy):
+    stranger = token(key=ROTATED_KEY, kid="kid-nobody-has")
+
+    response = await post(make_app(), **{"Cf-Access-Jwt-Assertion": stranger})
+
+    assert response.status_code == 403
+    assert certs_fetches(hevy) == 1
 
 
 async def test_unreachable_certs_endpoint_fails_closed(make_app, fake):
@@ -312,3 +345,65 @@ def test_partial_access_settings_stop_startup(make_app, env, missing):
 
     assert missing in str(exc.value)
     assert TEST_API_KEY not in str(exc.value)
+
+
+async def test_concurrent_requests_during_an_outage_make_one_certs_call(make_app, fake):
+    fake.get(CERTS, httpx.Response(502, text="Bad Gateway"))
+    app = make_app()
+    stranger = token(key=ROTATED_KEY, kid="kid-nobody-has")
+
+    responses = await asyncio.gather(
+        *(post(app, **{"Cf-Access-Jwt-Assertion": stranger}) for _ in range(10))
+    )
+
+    assert {r.status_code for r in responses} == {503}
+    assert certs_fetches(fake) == 1
+
+
+async def test_certs_are_fetched_again_once_the_retry_pause_ends(make_app, hevy, clock):
+    hevy.get(CERTS, httpx.Response(502, text="Bad Gateway"), certs((KEY, KID)))
+    app = make_app()
+    assertion = {"Cf-Access-Jwt-Assertion": token()}
+
+    assert (await post(app, **assertion)).status_code == 503
+    clock.advance(1)
+    assert (await post(app, **assertion)).status_code == 503
+    assert certs_fetches(hevy) == 1
+
+    clock.advance(5)
+    assert await call_user_info(app, token())
+    assert certs_fetches(hevy) == 2
+
+
+async def test_a_key_withdrawn_by_cloudflare_stops_being_trusted(make_app, hevy, clock):
+    hevy.get(CERTS, certs((KEY, KID)), certs((ROTATED_KEY, ROTATED_KID)))
+    app = make_app()
+    assert await call_user_info(app, token())
+
+    clock.advance(3600)
+    response = await post(app, **{"Cf-Access-Jwt-Assertion": token()})
+
+    assert response.status_code == 403
+    assert certs_fetches(hevy) == 2
+
+
+async def test_a_failed_refresh_of_old_keys_keeps_them(make_app, hevy, clock, caplog):
+    hevy.get(CERTS, certs((KEY, KID)), httpx.Response(502, text="Bad Gateway"))
+    app = make_app()
+    assert await call_user_info(app, token())
+
+    clock.advance(3600)
+    result = await call_user_info(app, token())
+
+    assert result.structured_content["username"]
+    assert certs_fetches(hevy) == 2
+    assert "Keeping the cached keys" in caplog.text
+
+
+def test_websockets_are_refused(make_app, hevy):
+    client = TestClient(make_app())
+
+    with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect("/mcp"):
+        pass
+
+    assert exc.value.code == 1008

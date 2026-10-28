@@ -17,4 +17,5 @@ The original spec kept the server unauthenticated and off the internet. To use i
 
 - Limiting `/mcp` to Anthropic's outbound range (`160.79.104.0/21`) with a Cloudflare WAF rule is an extra layer, not authentication: every Claude user's connector traffic comes from that range. The IP condition must not go in the Access policy, because sign-in happens in the phone's browser, from the phone's IP.
 - Without the `CF_ACCESS_*` settings the server is unauthenticated, as before. That mode is for local development and tests only, and the server logs a warning at startup.
-- Signing keys are fetched lazily and cached. An unknown key id triggers a refresh at most once a minute, so Cloudflare's key rotation is picked up without a restart, and forged key ids can't flood the certs endpoint.
+- Signing keys are fetched when first needed, cached, and refetched once they're an hour old, so a key Cloudflare withdraws stops being trusted without a restart. An unknown key id triggers a refresh at most once a minute, so rotation is picked up without a restart.
+- Forged key ids can't flood the certs endpoint. After a failed fetch there's no other fetch for five seconds, including before the first successful one, and requests are answered at once in the meantime: from the cached keys, or with a 503 if there are none. A failed refresh keeps the old keys.
