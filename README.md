@@ -216,7 +216,7 @@ In the tunnel's **Published application routes** (or **Public hostnames**):
 - **Hostname:** `hevy-mcp.example.com`, with **Path** `^/mcp`. Only the MCP endpoint goes through the tunnel, so `/health` and everything else never leave your network.
 - **Service:** `https://hevy-mcp.home.example` (Traefik), or the container directly.
 - **HTTP Host Header:** `hevy-mcp.example.com`, so Traefik's router for the public name matches (step 4).
-- **Origin TLS:** Traefik's certificate has to be valid for the public hostname. Otherwise you have to turn on **No TLS Verify**, which leaves that hop on your network unverified.
+- **Origin TLS:** Traefik's certificate has to be valid for the public hostname. Unless a resolver issues one for that name, Traefik serves its default self-signed certificate, and you have to turn on **No TLS Verify**, which leaves that hop on your network unverified.
 
 #### 6e. WAF and rate limiting
 
