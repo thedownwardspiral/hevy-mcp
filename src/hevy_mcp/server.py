@@ -21,6 +21,7 @@ from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
 from hevy_mcp.dates import parse_bound, parse_day, parse_optional_range, parse_range
 from hevy_mcp.hevy import MAX_PAGE_SIZE, MAX_TEMPLATE_PAGE_SIZE, HevyClient, HevyError
+from hevy_mcp.hosts import allowed_hosts_middleware
 from hevy_mcp.models import (
     BodyMeasurement,
     BodyMeasurementPage,
@@ -331,16 +332,10 @@ def http_options(
 ) -> dict[str, Any]:
     """Keyword arguments for FastMCP's ``run`` and ``http_app``.
 
-    They add the Cloudflare Access check and, with ``MCP_ALLOWED_HOSTS`` set,
-    FastMCP's strict Host/Origin guard, which answers other hosts with 421.
+    They add the allowed-hosts check, then the Cloudflare Access check.
     """
-    options: dict[str, Any] = {"middleware": access_middleware(settings, transport)}
-    if settings.mcp_allowed_hosts:
-        options |= {
-            "host_origin_protection": True,
-            "allowed_hosts": list(settings.mcp_allowed_hosts),
-        }
-    return options
+    middleware = allowed_hosts_middleware(settings) + access_middleware(settings, transport)
+    return {"middleware": middleware}
 
 
 def main() -> None:

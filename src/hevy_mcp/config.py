@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8000
     # Hostnames the server answers for (comma-separated). When set, requests
-    # with any other Host header are refused; loopback is always allowed, for
-    # the container's health check. Unset accepts any host.
-    mcp_allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+    # with any other Host header are refused; loopback is allowed only on
+    # /health, for the container's health check. Unset accepts any host.
+    mcp_allowed_hosts: Annotated[frozenset[str], NoDecode] = frozenset()
     tz: str = "UTC"
 
     @field_validator("tz")
@@ -85,29 +85,23 @@ class Settings(BaseSettings):
             raise ValueError(f"expected a hostname such as <team>.cloudflareaccess.com: {value!r}")
         return host
 
-    @field_validator("cf_access_allowed_emails", mode="before")
+    @field_validator("cf_access_allowed_emails", "mcp_allowed_hosts", mode="before")
     @classmethod
-    def _split_emails(cls, value: Any) -> Any:
+    def _split_list(cls, value: Any) -> Any:
         """A comma-separated list, compared without regard to case."""
         if isinstance(value, str):
             value = value.split(",")
-        return frozenset(email.strip().lower() for email in value if email.strip())
-
-    @field_validator("mcp_allowed_hosts", mode="before")
-    @classmethod
-    def _split_hosts(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            value = value.split(",")
-        return tuple(host.strip().lower() for host in value if host.strip())
+        return frozenset(item.strip().lower() for item in value if item.strip())
 
     @field_validator("mcp_allowed_hosts")
     @classmethod
-    def _hostnames_only(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
-        for host in hosts:
-            if "/" in host or host == "*":
+    def _hostnames_only(cls, hosts: frozenset[str]) -> frozenset[str]:
+        """Hosts match exactly, so a URL, port or wildcard would never match anything."""
+        for host in sorted(hosts):
+            if any(char in host for char in "/:*"):
                 raise ValueError(
                     f"MCP_ALLOWED_HOSTS takes hostnames such as hevy-mcp.example.com, "
-                    f"not URLs or a bare '*': {host!r}"
+                    f"not URLs, ports or wildcards: {host!r}"
                 )
         return hosts
 

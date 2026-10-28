@@ -147,32 +147,9 @@ def make_http_app(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[.
                 monkeypatch.setenv(key, value)
         settings = Settings()
         server = create_server(settings, transport=fake.transport)
-        app = server.http_app(path="/mcp", **http_options(settings, transport=fake.transport))
-        return InContainer(app)
+        return server.http_app(path="/mcp", **http_options(settings, transport=fake.transport))
 
     return _make
-
-
-class InContainer:
-    """Serves the app with the ASGI ``server`` address uvicorn reports in the container.
-
-    httpx's ASGITransport reports the request's own host there instead, and
-    FastMCP's Host guard trusts that address, so without this every Host would
-    look allowed.
-    """
-
-    ADDRESS = ("172.18.0.5", 8000)
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    def lifespan(self, _: Any) -> Any:
-        return self.app.lifespan(self.app)
-
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] in ("http", "websocket"):
-            scope = {**scope, "server": self.ADDRESS}
-        await self.app(scope, receive, send)
 
 
 def http_mcp_client(

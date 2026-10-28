@@ -120,7 +120,7 @@ Fill in `.env`:
 - `TRAEFIK_NETWORK`: the external Docker network Traefik is attached to.
 - `TRAEFIK_ENTRYPOINT`: an entrypoint that is reachable only from the home network.
 - `TRAEFIK_TLS`: `true` if that entrypoint serves TLS. If Traefik issues certificates through a resolver, add `traefik.http.routers.hevy-mcp.tls.certresolver` in `compose.override.yml`.
-- `MCP_ALLOWED_HOSTS`: the hostnames the server answers for, comma-separated. Use the public hostname, plus the LAN hostname if Traefik routes one. Any other Host header gets `421 Misdirected Request` before anything else runs, which blocks DNS-rebinding attacks and traffic that reaches the container some other way. Loopback is always allowed, so the container's health check keeps working.
+- `MCP_ALLOWED_HOSTS`: the hostnames the server answers for, comma-separated. Use the public hostname, plus the LAN hostname if Traefik routes one. Any other Host header gets `421 Misdirected Request` before anything else runs, which blocks DNS-rebinding attacks and traffic that reaches the container some other way. Loopback names are allowed only on `/health`, so the container's health check keeps working.
 
 The tunnel sends requests with the **public** hostname in the Host header (step 6), so Traefik needs a router for that name as well. Add one in `compose.override.yml`, or set `HEVY_MCP_HOSTNAME` to the public hostname if the server is only reached through the tunnel.
 
@@ -274,7 +274,7 @@ Once Access is configured, the home-network hostname only answers `/health`. Eve
 | `TZ` | `UTC` | Timezone for date-only inputs |
 | `LOG_LEVEL` | `INFO` | Log level for stdout |
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | Bind address inside the container |
-| `MCP_ALLOWED_HOSTS` | none (any host) | Comma-separated hostnames the server answers for. Others get `421`. Loopback is always allowed. Hostnames only, not URLs |
+| `MCP_ALLOWED_HOSTS` | none (any host) | Comma-separated hostnames the server answers for. Others get `421`. Loopback is allowed only on `/health`. Exact hostnames only: no URLs, ports or wildcards |
 
 ## Development
 
