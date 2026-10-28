@@ -21,6 +21,7 @@ from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
 from hevy_mcp.dates import parse_bound, parse_day, parse_optional_range, parse_range
 from hevy_mcp.hevy import MAX_PAGE_SIZE, MAX_TEMPLATE_PAGE_SIZE, HevyClient, HevyError
+from hevy_mcp.hosts import allowed_hosts_middleware
 from hevy_mcp.models import (
     BodyMeasurement,
     BodyMeasurementPage,
@@ -326,6 +327,17 @@ def create_server(
     return mcp
 
 
+def http_options(
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+) -> dict[str, Any]:
+    """Keyword arguments for FastMCP's ``run`` and ``http_app``.
+
+    They add the allowed-hosts check, then the Cloudflare Access check.
+    """
+    middleware = allowed_hosts_middleware(settings) + access_middleware(settings, transport)
+    return {"middleware": middleware}
+
+
 def main() -> None:
     settings = Settings()
     logging.basicConfig(
@@ -339,6 +351,6 @@ def main() -> None:
         host=settings.mcp_host,
         port=settings.mcp_port,
         path="/mcp",
-        middleware=access_middleware(settings),
         show_banner=False,
+        **http_options(settings),
     )

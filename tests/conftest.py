@@ -8,14 +8,19 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
-from hevy_mcp.server import create_server
+from hevy_mcp.config import Settings
+from hevy_mcp.server import create_server, http_options
 
 FIXTURES = Path(__file__).parent / "fixtures"
 HEVY = "https://api.hevyapp.com"
 TEST_API_KEY = "00000000-0000-4000-8000-000000000000"
+# Where HTTP tests address the server, as Traefik or the tunnel would.
+HTTP_BASE = "https://hevy-mcp.example"
 
 Reply = httpx.Response | Callable[[httpx.Request], httpx.Response]
 
@@ -127,3 +132,38 @@ async def client(make_client: Callable[..., Client], fake: FakeHTTP):
     async with make_client() as c:
         yield c
     assert not fake.unmatched, f"requests without a fake route: {fake.unmatched}"
+
+
+@pytest.fixture
+def make_http_app(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
+    """Build the HTTP app the way main() serves it, configured from the given env vars."""
+
+    def _make(**env: str | None) -> Any:
+        for key in list(os.environ):
+            if key.startswith(("HEVY_", "VAULT_", "MCP_", "CF_ACCESS_")):
+                monkeypatch.delenv(key)
+        for key, value in ({"HEVY_API_KEY": TEST_API_KEY} | env).items():
+            if value is not None:
+                monkeypatch.setenv(key, value)
+        settings = Settings()
+        server = create_server(settings, transport=fake.transport)
+        return server.http_app(path="/mcp", **http_options(settings, transport=fake.transport))
+
+    return _make
+
+
+def http_mcp_client(
+    app: Any, base_url: str = HTTP_BASE, headers: dict[str, str] | None = None
+) -> Client:
+    """An MCP client talking Streamable HTTP to the app at ``base_url``."""
+
+    def factory(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url=base_url, **kwargs
+        )
+
+    return Client(
+        StreamableHttpTransport(
+            f"{base_url}/mcp", headers=headers or {}, httpx_client_factory=factory
+        )
+    )

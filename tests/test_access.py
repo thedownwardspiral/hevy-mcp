@@ -2,35 +2,28 @@
 
 import asyncio
 import logging
-import os
 import time
 from collections.abc import Callable
 from typing import Any
 
 import httpx
-import httpx2
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
 from jwt.algorithms import RSAAlgorithm
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from hevy_mcp.access import access_middleware
-from hevy_mcp.config import Settings
-from hevy_mcp.server import create_server
-
-from .conftest import TEST_API_KEY, FakeHTTP, load
+from .conftest import HTTP_BASE, TEST_API_KEY, FakeHTTP, http_mcp_client, load
 
 TEAM = "hevy-test.cloudflareaccess.com"
 ISSUER = f"https://{TEAM}"
 CERTS = f"{ISSUER}/cdn-cgi/access/certs"
 AUD = "4714c1358e65fe4b408ad6d432a5f878f08194bdb4752441fd56faefa9b2b6f2"
 OWNER = "owner@example.com"
-BASE = "https://hevy-mcp.example"
+BASE = HTTP_BASE
 
 ACCESS_ENV = {
     "CF_ACCESS_TEAM_DOMAIN": TEAM,
@@ -80,24 +73,9 @@ def token(key: rsa.RSAPrivateKey = KEY, kid: str | None = KID, **claims: Any) ->
 
 
 @pytest.fixture
-def make_app(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
-    """Build the HTTP app as main() serves it, configured from the given env vars."""
-
-    def _make(**env: str | None) -> Any:
-        for key in list(os.environ):
-            if key.startswith(("HEVY_", "VAULT_", "MCP_", "CF_ACCESS_")):
-                monkeypatch.delenv(key)
-        settings = {"HEVY_API_KEY": TEST_API_KEY} | ACCESS_ENV | env
-        for key, value in settings.items():
-            if value is not None:
-                monkeypatch.setenv(key, value)
-        config = Settings()
-        server = create_server(config, transport=fake.transport)
-        return server.http_app(
-            path="/mcp", middleware=access_middleware(config, transport=fake.transport)
-        )
-
-    return _make
+def make_app(make_http_app: Callable[..., Any]) -> Callable[..., Any]:
+    """The HTTP app with Access configured, unless the env vars given override it."""
+    return lambda **env: make_http_app(**(ACCESS_ENV | env))
 
 
 @pytest.fixture
@@ -128,15 +106,9 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
 
 
 def mcp_client(app: Any, assertion: str | None) -> Client:
-    """An MCP client talking Streamable HTTP to the app, as Cloudflare would forward it."""
+    """An MCP client talking to the app as Cloudflare would forward it."""
     headers = {"Cf-Access-Jwt-Assertion": assertion} if assertion else {}
-
-    def factory(**kwargs: Any) -> httpx2.AsyncClient:
-        return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url=BASE, **kwargs)
-
-    return Client(
-        StreamableHttpTransport(f"{BASE}/mcp", headers=headers, httpx_client_factory=factory)
-    )
+    return http_mcp_client(app, headers=headers)
 
 
 async def call_user_info(app: Any, assertion: str | None) -> Any:
