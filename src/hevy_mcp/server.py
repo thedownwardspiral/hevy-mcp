@@ -9,6 +9,7 @@ from typing import Annotated, Any
 import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp_types import ToolAnnotations
@@ -16,7 +17,7 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from hevy_mcp.access import access_middleware
+from hevy_mcp.access import access_middleware, verified_caller
 from hevy_mcp.analysis import training_summary
 from hevy_mcp.config import Settings
 from hevy_mcp.dates import parse_bound, parse_day, parse_optional_range, parse_range
@@ -47,6 +48,8 @@ from hevy_mcp.secrets import SecretSourceError, resolve_api_key
 logger = logging.getLogger(__name__)
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+# How the tool-call log names the caller when Access isn't configured.
+UNAUTHENTICATED = "unauthenticated"
 
 Page = Annotated[int, Field(ge=1, description="Page number, starting at 1.")]
 PageSize = Annotated[
@@ -96,6 +99,27 @@ class HevyErrorMiddleware(Middleware):
             raise
 
 
+class CallerLogMiddleware(Middleware):
+    """Logs who called which tool, for an audit trail in ``docker logs``.
+
+    The caller is the email Cloudflare Access verified, or "unauthenticated"
+    when Access isn't configured. Nothing else from the request is logged.
+    """
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next: Any) -> Any:
+        # The client names the tool, so it's quoted: a newline can't fake a log line.
+        logger.info("Tool call %r by %s", context.message.name, _caller())
+        return await call_next(context)
+
+
+def _caller() -> str:
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return UNAUTHENTICATED
+    return verified_caller(request) or UNAUTHENTICATED
+
+
 class _State:
     hevy: HevyClient
 
@@ -135,7 +159,7 @@ def create_server(
         version=version("hevy-mcp"),
         instructions=INSTRUCTIONS,
         lifespan=connect,
-        middleware=[HevyErrorMiddleware()],
+        middleware=[CallerLogMiddleware(), HevyErrorMiddleware()],
         mask_error_details=True,
     )
 

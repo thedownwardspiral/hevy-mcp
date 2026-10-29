@@ -109,6 +109,19 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     return clock
 
 
+@pytest.fixture
+def debug_logs(caplog: pytest.LogCaptureFixture):
+    """Captures every log record at DEBUG, including FastMCP's, which don't propagate."""
+    caplog.set_level(logging.DEBUG)
+    fastmcp_logger = logging.getLogger("fastmcp")
+    level = fastmcp_logger.level
+    fastmcp_logger.addHandler(caplog.handler)
+    fastmcp_logger.setLevel(logging.DEBUG)
+    yield caplog
+    fastmcp_logger.removeHandler(caplog.handler)
+    fastmcp_logger.setLevel(level)
+
+
 def mcp_client(app: Any, assertion: str | None) -> Client:
     """An MCP client talking to the app as Cloudflare would forward it."""
     headers = {"Cf-Access-Jwt-Assertion": assertion} if assertion else {}
@@ -399,3 +412,65 @@ def test_websockets_are_refused(make_app, hevy):
         pass
 
     assert exc.value.code == 1008
+
+
+def records_starting(caplog: pytest.LogCaptureFixture, prefix: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+async def test_a_tool_call_logs_the_caller_and_the_tool(make_app, hevy, caplog):
+    caplog.set_level(logging.INFO)
+
+    await call_user_info(make_app(), token())
+
+    [record] = records_starting(caplog, "Tool call")
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == f"Tool call 'get_user_info' by {OWNER}"
+
+
+async def test_without_access_settings_the_caller_is_logged_as_unauthenticated(
+    make_app, hevy, caplog
+):
+    caplog.set_level(logging.INFO)
+
+    await call_user_info(make_app(**dict.fromkeys(ACCESS_ENV)), None)
+
+    [record] = records_starting(caplog, "Tool call")
+    assert record.getMessage() == "Tool call 'get_user_info' by unauthenticated"
+
+
+async def test_a_denied_request_is_logged_without_the_token_or_its_claims(make_app, hevy, caplog):
+    caplog.set_level(logging.INFO)
+    assertion = token(email="intruder@example.com")
+
+    await post(make_app(), **{"Cf-Access-Jwt-Assertion": assertion})
+
+    [record] = records_starting(caplog, "Denied")
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "Denied POST /mcp: caller is not an allowed email"
+    assert not records_starting(caplog, "Tool call")
+    assert assertion not in caplog.text
+    assert "intruder" not in caplog.text
+
+
+async def test_debug_logs_never_contain_tokens_header_values_or_the_api_key(
+    make_app, hevy, debug_logs
+):
+    app = make_app()
+    accepted = token()
+    rejected = token(email="intruder@example.com")
+    malformed = "malformed-header-value-that-must-not-be-logged"
+
+    await call_user_info(app, accepted)
+    for assertion in (rejected, malformed):
+        await post(app, **{"Cf-Access-Jwt-Assertion": assertion})
+
+    logs = debug_logs.text
+    assert records_starting(debug_logs, "Tool call"), "the capture should include the tool call"
+    assert any(r.levelno == logging.DEBUG for r in debug_logs.records)
+    for jwt_value in (accepted, rejected):
+        # The claims and the signature, whole or as any one segment.
+        for segment in jwt_value.split(".")[1:]:
+            assert segment not in logs
+    assert malformed not in logs
+    assert TEST_API_KEY not in logs
