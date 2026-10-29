@@ -18,6 +18,7 @@ import httpx
 import jwt
 from starlette.datastructures import Headers
 from starlette.middleware import Middleware
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 ASSERTION_HEADER = "cf-access-jwt-assertion"
 OPEN_PATHS = frozenset({"/health"})
+# Where a verified request carries the caller's email, in its ASGI scope state.
+CALLER_STATE_KEY = "access_email"
 # Tolerated clock difference between Cloudflare and this host.
 LEEWAY_SECONDS = 30
 # An unknown key id refreshes the keys at most this often, so tokens with
@@ -180,7 +183,7 @@ class AccessMiddleware:
         try:
             if not assertion:
                 raise AccessDenied("no Access token")
-            await self.verifier.verify(assertion)
+            email = await self.verifier.verify(assertion)
         except AccessDenied as exc:
             logger.warning("Denied %s %s: %s", scope["method"], scope["path"], exc)
             response = JSONResponse({"error": "Access denied."}, status_code=403)
@@ -191,7 +194,13 @@ class AccessMiddleware:
             response = JSONResponse({"error": "Authentication is unavailable."}, status_code=503)
             await response(scope, receive, send)
             return
+        scope.setdefault("state", {})[CALLER_STATE_KEY] = email
         await self.app(scope, receive, send)
+
+
+def verified_caller(request: Request) -> str | None:
+    """The email AccessMiddleware verified for this request, if it checked one."""
+    return getattr(request.state, CALLER_STATE_KEY, None)
 
 
 def access_middleware(

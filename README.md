@@ -234,7 +234,9 @@ curl -s https://hevy-mcp.example.com/.well-known/oauth-authorization-server
 curl -sk -X POST -H 'Host: hevy-mcp.example.com' https://hevy-mcp.home.example/mcp
 ```
 
-The last one should print `{"error":"Access denied."}`.
+The last one should print `{"error":"Access denied."}`, and the server logs it as `Denied POST /mcp: no Access token`.
+
+Every tool call is logged at `INFO` with the caller's verified email and the tool, such as `Tool call 'get_user_info' by you@example.com`, so `docker compose logs hevy-mcp` doubles as an audit trail. Without Access the caller shows as `unauthenticated`. Tokens, the `Cf-Access-Jwt-Assertion` header and the Hevy API key are never logged, not even at `DEBUG`; the only request header value that is logged is the hostname of a request refused for an unknown host.
 
 ### 7. Add it to Claude
 
