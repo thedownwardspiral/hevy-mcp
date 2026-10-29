@@ -2,8 +2,10 @@
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -15,6 +17,8 @@ from jwt.algorithms import RSAAlgorithm
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+
+from hevy_mcp.config import Settings
 
 from .conftest import HTTP_BASE, TEST_API_KEY, FakeHTTP, http_mcp_client, load
 
@@ -289,9 +293,11 @@ async def test_unreachable_certs_endpoint_fails_closed(make_app, fake):
     assert not fake.hevy_requests()
 
 
-async def test_without_access_settings_requests_need_no_token(make_app, hevy, caplog):
+# Blank is what compose.yml passes when .env leaves the settings empty.
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "blank"])
+async def test_without_access_settings_requests_need_no_token(make_app, hevy, caplog, value):
     caplog.set_level(logging.WARNING)
-    unset = dict.fromkeys(ACCESS_ENV)
+    unset = dict.fromkeys(ACCESS_ENV, value)
 
     app = make_app(**unset)
     result = await call_user_info(app, None)
@@ -299,6 +305,20 @@ async def test_without_access_settings_requests_need_no_token(make_app, hevy, ca
     assert result.structured_content["username"]
     assert "without authentication" in caplog.text
     assert certs_fetches(hevy) == 0
+
+
+def test_compose_passes_every_access_setting_through_env():
+    """A setting compose.yml leaves out never reaches the container, whatever .env says."""
+    repo = Path(__file__).parent.parent
+    names = {name.upper() for name in Settings.model_fields if name.startswith("cf_access_")}
+
+    compose = (repo / "compose.yml").read_text()
+    passed = set(re.findall(r"^\s+(CF_ACCESS_\w+): \$\{\1:-\}$", compose, re.MULTILINE))
+    env_example = (repo / "env.example").read_text()
+    listed = set(re.findall(r"^(CF_ACCESS_\w+)=$", env_example, re.MULTILINE))
+
+    assert passed == names
+    assert listed == names
 
 
 @pytest.mark.parametrize(

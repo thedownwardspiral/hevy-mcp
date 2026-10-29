@@ -185,19 +185,25 @@ Saving the application protects the hostname straight away. Requests without a t
 
 #### 6c. Turn on the server's check
 
-`compose.yml` doesn't pass these settings through yet, so putting them in `.env` alone has no effect. Add them in `compose.override.yml`:
+Fill in the three Access settings in `.env`. Set all three together: setting only some of them stops startup.
 
-```yaml
-services:
-  hevy-mcp:
-    environment:
-      CF_ACCESS_TEAM_DOMAIN: <team>.cloudflareaccess.com
-      CF_ACCESS_AUD: <AUD tag>
-      CF_ACCESS_ALLOWED_EMAILS: you@gmail.com
+```dotenv
+CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
+CF_ACCESS_AUD=<AUD tag>
+CF_ACCESS_ALLOWED_EMAILS=you@gmail.com
 ```
+
+Check that all three reach the container with your values:
 
 ```bash
 docker compose config | grep CF_ACCESS
+```
+
+The three lines are always there. A line that shows `""` means that setting is still blank. Variables exported in your shell take precedence over `.env`, so a blank or old value can also come from there.
+
+Then recreate the container so it picks them up. `docker compose restart` keeps the old environment:
+
+```bash
 docker compose up -d
 ```
 
