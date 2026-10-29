@@ -193,10 +193,17 @@ CF_ACCESS_AUD=<AUD tag>
 CF_ACCESS_ALLOWED_EMAILS=you@gmail.com
 ```
 
-Check that they reach the container, then restart it:
+Check that all three reach the container with your values:
 
 ```bash
 docker compose config | grep CF_ACCESS
+```
+
+The three lines are always there. A line that shows `""` means that setting is still blank. Variables exported in your shell take precedence over `.env`, so a blank or old value can also come from there.
+
+Then recreate the container so it picks them up. `docker compose restart` keeps the old environment:
+
+```bash
 docker compose up -d
 ```
 
