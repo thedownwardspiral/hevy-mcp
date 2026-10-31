@@ -122,7 +122,18 @@ Fill in `.env`:
 - `TRAEFIK_TLS`: `true` if that entrypoint serves TLS. If Traefik issues certificates through a resolver, add `traefik.http.routers.hevy-mcp.tls.certresolver` in `compose.override.yml`.
 - `MCP_ALLOWED_HOSTS`: the hostnames the server answers for, comma-separated. Use the public hostname, plus the LAN hostname if Traefik routes one. Any other Host header gets `421 Misdirected Request` before anything else runs, which blocks DNS-rebinding attacks and traffic that reaches the container some other way. Loopback names are allowed only on `/health`, so the container's health check keeps working.
 
-The tunnel sends requests with the **public** hostname in the Host header (step 6), so Traefik needs a router for that name as well. Add one in `compose.override.yml`, or set `HEVY_MCP_HOSTNAME` to the public hostname if the server is only reached through the tunnel.
+The tunnel sends requests with the **public** hostname in the Host header (step 6d), but connects with the **home-network** hostname as its TLS server name, so the tunnel can verify a certificate your own CA issues. Traefik chooses the router by Host header and the certificate by server name, so the router needs both names and the certificate only the home-network one. In `compose.override.yml`:
+
+```yaml
+services:
+  hevy-mcp:
+    labels:
+      traefik.http.routers.hevy-mcp.rule: Host(`hevy-mcp.example.com`) || Host(`hevy-mcp.home.example`)
+      traefik.http.routers.hevy-mcp.tls.certresolver: <resolver>
+      traefik.http.routers.hevy-mcp.tls.domains[0].main: hevy-mcp.home.example
+```
+
+`<resolver>` is a Traefik ACME resolver that can issue a certificate for the home-network name, such as one pointed at a step-ca server. If that CA isn't in Traefik's trust store, give the resolver its own `caCertificates`, not the `LEGO_CA_CERTIFICATES` environment variable, which replaces the trust store for every resolver and breaks the Let's Encrypt ones. Set the resolver's `certificatesDuration` to the CA's certificate lifetime in hours (`168` for 7-day certificates), so Traefik renews early enough. Without it, Traefik assumes 90 days.
 
 The container has to resolve and reach Vault. Names under a home domain often need a home DNS server that containers don't use by default. If startup reports that Vault can't be reached, uncomment the `dns:` or `extra_hosts:` entry in `compose.yml` (or set it in `compose.override.yml`).
 
@@ -217,7 +228,11 @@ In the tunnel's **Published application routes** (or **Public hostnames**):
 - **Hostname:** `hevy-mcp.example.com`, with **Path** `^/mcp$`. Only the MCP endpoint goes through the tunnel, so `/health` and everything else never leave your network. The path is anchored at both ends so the tunnel forwards exactly the path the rate-limit rule counts (step 6e); `^/mcp` would also forward `/mcp/anything`.
 - **Service:** `https://hevy-mcp.home.example` (Traefik), or the container directly.
 - **HTTP Host Header:** `hevy-mcp.example.com`, so Traefik's router for the public name matches (step 4).
-- **Origin TLS:** Traefik's certificate has to be valid for the public hostname. Unless a resolver issues one for that name, Traefik serves its default self-signed certificate, and you have to turn on **No TLS Verify**, which leaves that hop on your network unverified.
+- **Origin TLS:** verify Traefik's certificate. Leave **No TLS Verify** and **Match SNI to Host** off, and set:
+  - **Origin Server Name:** `hevy-mcp.home.example`, the name on Traefik's certificate (step 4). `cloudflared` sends it as the TLS server name, so Traefik serves that certificate.
+  - **CA Pool:** the path to your CA's root certificate on the machine running `cloudflared`, such as `/etc/cloudflared/home-ca.pem`. It's read by `cloudflared` itself, not uploaded to Cloudflare. A `cloudflared` running as a service needs to be able to read it.
+
+  If the certificate can't be verified, the tunnel answers `502` rather than forwarding the request. **No TLS Verify** leaves this hop unchecked, so only turn it on to rule TLS out while debugging.
 
 #### 6e. WAF and rate limiting
 
@@ -256,7 +271,7 @@ Every tool call is logged at `INFO` with the caller's verified email and the too
 2. Claude opens Access's sign-in page. Sign in with Google as `you@gmail.com`.
 3. The connector now works in Claude Desktop and the Claude mobile app as well. You sign in again when the Access session ends.
 
-**Claude Code** connects to the same public URL and signs in through Access in your browser, using a local redirect. This setup hasn't been tested end to end yet.
+**Claude Code** connects to the same public URL and signs in through Access in your browser, using a local redirect. Run `/mcp` in Claude Code and choose **Authenticate**. Access asks you to authorize the client, and skips the Google step if you already have an Access session in that browser. Claude Code's requests come from your own IP rather than Anthropic's, so the WAF rule (step 6e) has to allow that range.
 
 ```bash
 claude mcp add --transport http hevy https://hevy-mcp.example.com/mcp
