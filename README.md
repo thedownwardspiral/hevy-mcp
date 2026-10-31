@@ -225,7 +225,10 @@ Under **Security → WAF** for the domain:
 - **Custom rule:** block requests whose host is `hevy-mcp.example.com` unless the source IP is in `160.79.104.0/21` (Anthropic) or a range of your own.
   - This doesn't break sign-in. Claude fetches the discovery metadata from Anthropic's IPs, and your browser signs in on `<team>.cloudflareaccess.com`, a different host the rule doesn't cover.
   - Don't put the IP condition in the Access policy instead. Policies are also checked when your browser signs in, from your phone's IP.
-- **Rate-limiting rule:** one rule on `http.host eq "hevy-mcp.example.com"` (the Free plan allows one). It caps how hard a misbehaving client can hit your Hevy API quota.
+- **Rate-limiting rule:** one rule on `http.request.uri.path eq "/mcp"`, counted per IP, blocking for 10 seconds once a client passes 30 requests in 10 seconds. It caps how hard a misbehaving client can hit your Hevy API quota.
+  - The Free plan allows one rate-limiting rule per zone, matched on the path only, with the period and block both fixed at 10 seconds. Matching on the host needs Pro, so the rule also covers `/mcp` on any other hostname in the zone.
+  - Claude's requests all come from Anthropic's IPs, so all your connector traffic counts as one client. A tool call takes a few requests, which leaves plenty of room at 30.
+  - Requests are counted before Access checks them, so unauthenticated floods are capped too.
 
 #### 6f. Check it
 
