@@ -19,7 +19,7 @@ Claude (claude.ai, Desktop, mobile)
             ├─ WAF custom rule: block unless the source is in an allowed range
             ├─ Access (Managed OAuth): no valid token → 401 + discovery metadata
             │    sign-in: your browser → <team>.cloudflareaccess.com → Google
-            └─ Tunnel route ^/mcp, Host header set to the public hostname
+            └─ Tunnel route ^/mcp$, Host header set to the public hostname
                  └─ Traefik → hevy-mcp container
                       ├─ Cf-Access-Jwt-Assertion checked: signature, aud, iss, exp, email
                       └─ tool runs → Hevy API (API key read from Vault at startup)
@@ -178,6 +178,7 @@ Then, in Cloudflare, go to **Zero Trust → Integrations → Identity providers 
   - **Allowed redirect URIs:** `https://claude.ai/api/mcp/auth_callback`, which claude.ai on the web, Desktop and mobile all use.
   - **Allow localhost clients** and **Allow loopback clients:** on, for Claude Code, which redirects to a local port that changes every session.
   - **Grant session duration:** "Same as session duration". **Access token lifetime:** Default. Claude refreshes the token in the background.
+- **Advanced settings → Cookie settings:** **HTTP Only** on. **App Launcher visibility:** off. Nothing on this host runs in a browser, so neither is needed.
 
 Save, then copy the application's **AUD tag** from its overview. The API also returns it as `aud` from `GET /accounts/{account_id}/access/apps`.
 
@@ -213,7 +214,7 @@ The startup warning about Access goes away. From now on every request except `/h
 
 In the tunnel's **Published application routes** (or **Public hostnames**):
 
-- **Hostname:** `hevy-mcp.example.com`, with **Path** `^/mcp`. Only the MCP endpoint goes through the tunnel, so `/health` and everything else never leave your network.
+- **Hostname:** `hevy-mcp.example.com`, with **Path** `^/mcp$`. Only the MCP endpoint goes through the tunnel, so `/health` and everything else never leave your network. The path is anchored at both ends so the tunnel forwards exactly the path the rate-limit rule counts (step 6e); `^/mcp` would also forward `/mcp/anything`.
 - **Service:** `https://hevy-mcp.home.example` (Traefik), or the container directly.
 - **HTTP Host Header:** `hevy-mcp.example.com`, so Traefik's router for the public name matches (step 4).
 - **Origin TLS:** Traefik's certificate has to be valid for the public hostname. Unless a resolver issues one for that name, Traefik serves its default self-signed certificate, and you have to turn on **No TLS Verify**, which leaves that hop on your network unverified.
