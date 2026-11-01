@@ -27,6 +27,17 @@ EXPECTED_TOOLS = {
     "get_routine_folder",
 }
 
+WRITE_TOOLS = {
+    "create_workout": "create",
+    "update_workout": "update",
+    "create_routine": "create",
+    "update_routine": "update",
+    "create_routine_folder": "create",
+    "create_exercise_template": "create",
+    "create_body_measurement": "create",
+    "update_body_measurement": "update",
+}
+
 
 async def test_every_tool_is_listed_and_read_only(client):
     tools = await client.list_tools()
@@ -36,6 +47,23 @@ async def test_every_tool_is_listed_and_read_only(client):
         assert tool.description, tool.name
         assert tool.annotations.read_only_hint is True, tool.name
         assert tool.annotations.open_world_hint is True, tool.name
+
+
+async def test_write_tools_are_listed_only_when_enabled(writer, client):
+    tools = {t.name: t for t in await writer.list_tools()}
+
+    assert tools.keys() == EXPECTED_TOOLS | WRITE_TOOLS.keys()
+    for name, kind in WRITE_TOOLS.items():
+        hints = tools[name].annotations
+        assert tools[name].description, name
+        assert hints.read_only_hint is False, name
+        assert hints.destructive_hint is (kind == "update"), name
+        assert hints.idempotent_hint is (kind == "update"), name
+        assert hints.open_world_hint is True, name
+    for name in EXPECTED_TOOLS:
+        assert tools[name].annotations.read_only_hint is True, name
+    assert "Confirm" in writer.instructions
+    assert "Read-only" in client.instructions
 
 
 async def test_health_route_reports_ok(monkeypatch):

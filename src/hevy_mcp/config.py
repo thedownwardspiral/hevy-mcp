@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Most pages a range query walks before it stops and reports truncation.
     hevy_range_max_pages: int = Field(50, ge=1)
     hevy_template_cache_seconds: float = Field(600, ge=0)
+    # Off by default: only then are the tools that create and update Hevy data
+    # registered at all.
+    hevy_enable_writes: bool = False
 
     # Vault, used when HEVY_API_KEY is not set. VAULT_ADDR has no default so
     # that no real hostname is committed. Each AppRole credential can instead

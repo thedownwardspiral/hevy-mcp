@@ -1,11 +1,11 @@
 # hevy-mcp
 
-A small, self-hosted, read-only [MCP](https://modelcontextprotocol.io) server for your [Hevy](https://www.hevyapp.com) workouts and body measurements. Once it's running, an assistant such as Claude can answer questions like "how has my bench press moved over the last three months?" or "what's my weight trend since spring?".
+A small, self-hosted [MCP](https://modelcontextprotocol.io) server for your [Hevy](https://www.hevyapp.com) workouts and body measurements. Once it's running, an assistant such as Claude can answer questions like "how has my bench press moved over the last three months?" or "what's my weight trend since spring?". It's read-only by default. With writes turned on, the assistant can also log workouts and measurements and edit routines.
 
 - Built with [FastMCP](https://gofastmcp.com) 4.x and served over Streamable HTTP at `/mcp`, with a health check at `/health`.
 - Runs as a Docker container behind an existing Traefik instance. No host port is published.
 - Reads the Hevy API key from HashiCorp Vault at startup, logging in with AppRole. The key is never baked into the image, written to an env file or logged.
-- Every tool is read-only and annotated `readOnlyHint`. Nothing can change your Hevy data.
+- Read-only by default: every tool is annotated `readOnlyHint` and nothing can change your Hevy data. Set `HEVY_ENABLE_WRITES=true` to add tools that create and update it (see [Write tools](#write-tools)).
 - Reachable from Claude anywhere, including the mobile app, through a Cloudflare Tunnel. Cloudflare Access signs you in with Google, and the server checks the JWT Access signs on every request. Without the Access settings the server is unauthenticated, which is only for local development.
 
 ## How requests reach it
@@ -32,9 +32,9 @@ There are four layers, and each one fails closed:
 | **WAF IP rule** | Everyone outside Anthropic's range and your own. Any Claude user's connector traffic comes from Anthropic's range too, so this is an extra layer, not authentication |
 | **Access policy** | Anyone who can't sign in to Google as the allowed email. Sign-in uses Managed OAuth: Access is the OAuth server Claude registers with, and Claude only ever holds an opaque Access token |
 | **Server JWT check** | Requests that reach the server without passing through Access, for example through a misconfigured route. Every request except `/health` needs a valid Access JWT for the allowed email |
-| **Read-only tools** | Changes to your Hevy data, even by an authorized caller |
+| **Read-only tools** | Changes to your Hevy data, even by an authorized caller, unless `HEVY_ENABLE_WRITES=true` |
 
-[ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md) records why it's built this way and which alternatives were rejected.
+[ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md) records why it's built this way and which alternatives were rejected. [ADR 0002](docs/adr/0002-opt-in-write-tools.md) covers the write tools.
 
 ## Tools
 
@@ -55,6 +55,24 @@ There are four layers, and each one fails closed:
 | `list_routines` / `get_routine` / `list_routine_folders` / `get_routine_folder` | Routines and their folders |
 
 Results keep Hevy's field names, units included (`weight_kg`, `distance_meters`). Page sizes above Hevy's limits (10, or 100 for exercise templates) are capped rather than rejected. Dates are ISO 8601, and a date-only value covers that whole day in the server's `TZ`. Range tools page through Hevy lazily and stop at the start date. They walk at most `HEVY_RANGE_MAX_PAGES` pages and set `truncated: true` if they stop early. Short Hevy failures (429, 5xx, timeouts) are retried with jittered backoff.
+
+### Write tools
+
+These are only there when `HEVY_ENABLE_WRITES=true`. They change your real Hevy data, and Hevy's API can't delete anything, so a mistake has to be undone in the Hevy app.
+
+| Tool | What it does |
+|---|---|
+| `create_workout` | Logs a completed workout with its exercises and sets |
+| `update_workout` | Changes a workout. `is_private` is required, because Hevy doesn't report it and makes the workout public when it's left out |
+| `create_routine` / `update_routine` | Creates or changes a routine, with rest times and planned sets including rep ranges |
+| `create_routine_folder` | Creates a routine folder, placed first |
+| `create_exercise_template` | Creates a custom exercise |
+| `create_body_measurement` / `update_body_measurement` | Logs or changes the day's measurements. `clear` erases named fields |
+
+- Updates change only the fields you give. The server reads the current record and sends it back with your changes, because Hevy's update endpoints replace the whole record. A given `exercises` list replaces every exercise.
+- Hevy doesn't return routine notes and erases them when an update leaves them out, so `update_routine` requires `notes`. The assistant should ask you for them; `""` means none.
+- Creates aren't retried once Hevy may have received them (a timeout, a dropped connection or a 5xx). The error says to check before trying again, so a workout can't be logged twice. Rate limits (429) are still retried.
+- Hevy's routine and custom-exercise limits are reported as limits, and a second body measurement for a day as a conflict.
 
 ## Setup
 
@@ -295,6 +313,7 @@ Once Access is configured, the home-network hostname only answers `/health`. Eve
 | `HEVY_MAX_RETRIES` / `HEVY_RETRY_BACKOFF_SECONDS` | `3` / `0.5` | Retries for 429, 5xx and timeouts |
 | `HEVY_RANGE_MAX_PAGES` | `50` | Most pages a range tool walks (500 workouts) |
 | `HEVY_TEMPLATE_CACHE_SECONDS` | `600` | How long exercise templates are cached |
+| `HEVY_ENABLE_WRITES` | `false` | Adds the [write tools](#write-tools), which create and update Hevy data |
 | `CF_ACCESS_TEAM_DOMAIN` | none | Cloudflare Access team domain, such as `<team>.cloudflareaccess.com`. With the next two settings, every request except `/health` needs a valid Access JWT. Without them the server is unauthenticated. See [ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md) |
 | `CF_ACCESS_AUD` | none | The Access application's AUD tag |
 | `CF_ACCESS_ALLOWED_EMAILS` | none | Comma-separated emails allowed to call the server (case-insensitive) |

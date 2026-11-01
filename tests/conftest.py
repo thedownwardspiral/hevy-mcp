@@ -79,6 +79,9 @@ class FakeHTTP:
     def post(self, url: str, *replies: Reply, **kwargs: Any) -> None:
         self.route("POST", url, *replies, **kwargs)
 
+    def put(self, url: str, *replies: Reply, **kwargs: Any) -> None:
+        self.route("PUT", url, *replies, **kwargs)
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         # Match the raw (still percent-encoded) path, as Hevy would see it.
@@ -132,6 +135,19 @@ async def client(make_client: Callable[..., Client], fake: FakeHTTP):
     async with make_client() as c:
         yield c
     assert not fake.unmatched, f"requests without a fake route: {fake.unmatched}"
+
+
+@pytest.fixture
+async def writer(make_client: Callable[..., Client], fake: FakeHTTP):
+    """A client for a server with the write tools enabled."""
+    async with make_client(HEVY_ENABLE_WRITES="true") as c:
+        yield c
+    assert not fake.unmatched, f"requests without a fake route: {fake.unmatched}"
+
+
+def sent(request: httpx.Request) -> Any:
+    """The JSON body a request carried."""
+    return json.loads(request.content)
 
 
 @pytest.fixture
