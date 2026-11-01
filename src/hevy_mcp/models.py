@@ -289,7 +289,9 @@ class WorkoutSetInput(HevyInput):
     reps: Count | None = None
     distance_meters: Count | None = None
     duration_seconds: Count | None = None
-    custom_metric: float | None = Field(None, description="Steps or floors, for those exercises.")
+    custom_metric: NonNegative | None = Field(
+        None, description="Steps or floors, for those exercises."
+    )
     rpe: Rpe | None = None
 
 
@@ -318,7 +320,9 @@ class RoutineSetInput(HevyInput):
     rep_range: RepRangeInput | None = Field(None, description="Planned reps as a range, e.g. 8-12.")
     distance_meters: Count | None = None
     duration_seconds: Count | None = None
-    custom_metric: float | None = Field(None, description="Steps or floors, for those exercises.")
+    custom_metric: NonNegative | None = Field(
+        None, description="Steps or floors, for those exercises."
+    )
 
 
 class RoutineExerciseInput(HevyInput):

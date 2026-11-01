@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import AsyncIterator
 from importlib.metadata import version
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastmcp import FastMCP
@@ -70,6 +70,8 @@ CREATES = ToolAnnotations(
 UPDATES = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
 )
+# update_routine's folder_id for Hevy's default folder, which has no id.
+MY_ROUTINES = "my_routines"
 # How the tool-call log names the caller when Access isn't configured.
 UNAUTHENTICATED = "unauthenticated"
 
@@ -523,7 +525,11 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         ],
         title: str | None = None,
         folder_id: Annotated[
-            int | None, Field(description="Move the routine to this routine folder.")
+            int | Literal["my_routines"] | None,
+            Field(
+                description='Move the routine to this routine folder, or "my_routines" to '
+                'take it out of its folder and back to Hevy\'s default "My Routines".'
+            ),
         ] = None,
         exercises: Annotated[
             list[RoutineExerciseInput] | None,
@@ -538,7 +544,9 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         current = routine_body(await state.hevy.routine(routine_id))
         if title is not None:
             current["title"] = title
-        if folder_id is not None:
+        if folder_id == MY_ROUTINES:
+            current["folder_id"] = None
+        elif folder_id is not None:
             current["folder_id"] = folder_id
         if exercises is not None:
             current["exercises"] = _dump_routine(exercises)

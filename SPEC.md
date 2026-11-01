@@ -130,7 +130,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 | `create_workout(title, start_time, end_time, exercises, description?, is_private?)` | `POST /v1/workouts` |
 | `update_workout(workout_id, is_private, title?, description?, start_time?, end_time?, exercises?)` | `GET`, then `PUT /v1/workouts/{id}` |
 | `create_routine(title, exercises, folder_id?, notes?)` | `POST /v1/routines` |
-| `update_routine(routine_id, notes, title?, folder_id?, exercises?)` | `GET`, then `PUT /v1/routines/{id}` |
+| `update_routine(routine_id, notes, title?, folder_id? (an id or "my_routines"), exercises?)` | `GET`, then `PUT /v1/routines/{id}` |
 | `create_routine_folder(title)` | `POST /v1/routine_folders` |
 | `create_exercise_template(title, exercise_type, equipment_category, muscle_group, other_muscles?)` | `POST /v1/exercise_templates` |
 | `create_body_measurement(date, measurements)` | `POST /v1/body_measurements` |

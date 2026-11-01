@@ -244,6 +244,36 @@ async def test_create_routine_posts_planned_sets(writer, fake):
     assert "rep_range" not in warmup
 
 
+async def test_update_routine_can_move_back_to_my_routines(writer, fake):
+    fake.get(f"/v1/routines/{ROUTINE_ID}", json=load("hevy/routine.json"))
+    fake.put(f"/v1/routines/{ROUTINE_ID}", json=load("hevy/routine.json"))
+
+    await writer.call_tool(
+        "update_routine", {"routine_id": ROUTINE_ID, "notes": "", "folder_id": "my_routines"}
+    )
+
+    [put] = [r for r in fake.hevy_requests() if r.method == "PUT"]
+    assert sent(put)["routine"]["folder_id"] is None
+
+
+@pytest.mark.parametrize("tool", ["create_workout", "create_routine"])
+async def test_negative_custom_metric_is_refused(writer, fake, tool):
+    exercise = {"exercise_template_id": "05293BCA", "sets": [{"custom_metric": -1}]}
+    arguments = (
+        new_workout(exercises=[exercise])
+        if tool == "create_workout"
+        else {
+            "title": "Upper",
+            "exercises": [exercise],
+        }
+    )
+
+    with pytest.raises(ToolError, match="custom_metric"):
+        await writer.call_tool(tool, arguments)
+
+    assert fake.hevy_requests() == []
+
+
 async def test_create_routine_rejects_a_backwards_rep_range(writer, fake):
     exercise = {
         "exercise_template_id": "05293BCA",
