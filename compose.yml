@@ -19,6 +19,8 @@ services:
       VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
       VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
       VAULT_KV_PATH: ${VAULT_KV_PATH:-hevy-mcp}
+      # Write tools that create and update Hevy data; off unless set to true.
+      HEVY_ENABLE_WRITES: ${HEVY_ENABLE_WRITES:-false}
       TZ: ${TZ:-UTC}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Hostnames the server answers for; empty accepts any host.

@@ -1,6 +1,6 @@
 # Spec: Hevy MCP server
 
-This is the spec from issue #2, updated to match the deployment. The server was first meant to be unauthenticated and reachable only on the home network. It's now reachable from Claude anywhere through a Cloudflare Tunnel and Cloudflare Access, for the reasons in [ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md).
+This is the spec from issue #2, updated to match the deployment. The server was first meant to be unauthenticated and reachable only on the home network. It's now reachable from Claude anywhere through a Cloudflare Tunnel and Cloudflare Access, for the reasons in [ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md). It was also first meant to be read-only. It can now create and update Hevy data when that's switched on, as [ADR 0002](docs/adr/0002-opt-in-write-tools.md) describes.
 
 ## Problem Statement
 
@@ -8,7 +8,7 @@ I log my training and body measurements in Hevy, but the only way to look at tha
 
 ## Solution
 
-A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools. It runs as a Docker container on my home server and sits behind my existing Traefik instance, which routes a hostname on my home network to it. It talks to Hevy's public API with my personal Hevy API key, which it reads at startup from my HashiCorp Vault at `vault.<home-domain>`. Vault runs in my k3s cluster, but the MCP server does not. It is a plain Docker container on the Docker host and reaches Vault over the network like any other client outside the cluster. The image is built and published to GitHub Container Registry (GHCR), and my server pulls it from there. MCP clients (Claude on the web, Desktop and mobile, and Claude Code) connect to it over Streamable HTTP at a public hostname, through a Cloudflare Tunnel, so nothing on the home network accepts connections from the internet. Cloudflare Access is the OAuth server clients sign in through, with Google as the only login method and a policy that allows only my email. The server holds no OAuth state of its own, but it checks the JWT that Access forwards on every request except `/health`, so a misconfigured tunnel or Access application fails closed.
+A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-only by default, with tools that create and update data when I turn them on. It runs as a Docker container on my home server and sits behind my existing Traefik instance, which routes a hostname on my home network to it. It talks to Hevy's public API with my personal Hevy API key, which it reads at startup from my HashiCorp Vault at `vault.<home-domain>`. Vault runs in my k3s cluster, but the MCP server does not. It is a plain Docker container on the Docker host and reaches Vault over the network like any other client outside the cluster. The image is built and published to GitHub Container Registry (GHCR), and my server pulls it from there. MCP clients (Claude on the web, Desktop and mobile, and Claude Code) connect to it over Streamable HTTP at a public hostname, through a Cloudflare Tunnel, so nothing on the home network accepts connections from the internet. Cloudflare Access is the OAuth server clients sign in through, with Google as the only login method and a policy that allows only my email. The server holds no OAuth state of its own, but it checks the JWT that Access forwards on every request except `/health`, so a misconfigured tunnel or Access application fails closed.
 
 ## User Stories
 
@@ -25,7 +25,7 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 11. As the home-lab owner, I want logs written to stdout at a configurable level, so that I can read them with `docker logs` like my other containers.
 12. As an MCP client user, I want to connect over Streamable HTTP at a single `/mcp` endpoint, so that standard MCP clients work without custom setup.
 13. As an MCP client user, I want every tool to have a clear name, description and typed parameters, so that the assistant picks the right tool and calls it correctly.
-14. As an MCP client user, I want all tools to be read-only and marked that way, so that the assistant can't change or delete my Hevy data by accident.
+14. As an MCP client user, I want the tools to be read-only and marked that way unless I've turned writes on, so that the assistant can't change my Hevy data by accident.
 15. As a Hevy user, I want to fetch my Hevy profile (name, username, preferred weight and distance units, Pro status), so that the assistant can present numbers in my preferred units.
 16. As a Hevy user, I want to list my workouts newest first with pagination, so that the assistant can browse my recent training.
 17. As a Hevy user, I want to get one workout's full details (exercises, sets, weights, reps, RPE, duration, distance), so that I can ask about a specific session.
@@ -58,6 +58,11 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 44. As the home-lab owner, I want the Compose file on my server to pull the image from GHCR rather than build it locally, so that the server doesn't need the source code or build tools.
 45. As a developer, I want CI to run the test suite before it pushes an image, so that a broken build never reaches GHCR.
 46. As a Claude user, I want to use the server from Claude on my phone, the web and Desktop, whose connector calls come from Anthropic's cloud, so that I can ask about my training wherever I am.
+47. As the home-lab owner, I want write tools to be off unless I set `HEVY_ENABLE_WRITES=true`, so that a new image never gives the assistant write access I didn't choose.
+48. As a Hevy user, I want to log a workout, a body measurement, a routine, a routine folder or a custom exercise by telling the assistant, so that I don't have to enter it in the app.
+49. As a Hevy user, I want to correct a logged workout, routine or body measurement by naming only what changes, so that a correction can't wipe the fields I didn't mention.
+50. As a Hevy user, I want a create that may or may not have reached Hevy to say so instead of being retried, so that a lost response can't log a workout twice. Hevy's API can't delete, so a duplicate would have to be removed by hand.
+51. As an MCP client user, I want write tools annotated as writes (and updates as destructive and idempotent), so that my client can ask me before running them.
 47. As the home-lab owner, I want clients to sign in through Cloudflare Access with Google, allowing only my email, so that nobody else can read my data even though the hostname is public.
 48. As the home-lab owner, I want the server itself to reject any request without a valid Access JWT for an allowed email, so that a wrong Cloudflare or Traefik setting can't expose my data.
 49. As the home-lab owner, I want the server to answer only for the hostnames I configure, so that DNS-rebinding attacks and traffic that reaches the container some other way are refused.
@@ -94,8 +99,13 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 - Workouts have no date filter. Range tools page newest first and stop once they pass the start date. Body measurements are handled the same way. Exercise history does take `start_date` and `end_date` natively.
 - Hevy stores weights in kg and distances in metres. User info carries the preferred `weight_unit` and `distance_unit`.
 - Hevy asks scheduled jobs not to fire exactly on the hour. That doesn't apply here (there's no polling), but nothing in the server should poll.
+- Where the live write endpoints differ from the OpenAPI document (found with a live test on 2026-11-01):
+  - `PUT /v1/routines/{id}` refuses `rep_range: null`, though the document marks it nullable and `GET` returns it. Sets without a range leave the field out.
+  - `PUT /v1/body_measurements/{date}` refuses `null` for every field. A field left out is set to null, as documented, so leaving it out is how a field is cleared.
+  - `POST /v1/exercise_templates` answers with the new template's id (a UUID) as bare text, not `{"id": <integer>}`.
+  - `POST /v1/workouts` and `PUT /v1/workouts/{id}` both answer `{"workout": [<workout>]}`. Routine writes answer `{"routine": <routine>}`, and folder creation `{"routine_folder": <folder>}`.
 
-**Tool surface (all read-only)**
+**Tool surface: read-only tools**
 
 | Tool | Backed by |
 |---|---|
@@ -112,6 +122,26 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 | `list_body_measurements(page, page_size)` / `get_body_measurement(date)` | `GET /v1/body_measurements[/{date}]` |
 | `get_body_measurements_in_range(start_date, end_date)` | Pages body measurements lazily |
 | `list_routines` / `get_routine` / `list_routine_folders` / `get_routine_folder` | The matching `/v1/routines` and `/v1/routine_folders` endpoints |
+
+**Tool surface: write tools** (registered only with `HEVY_ENABLE_WRITES=true`)
+
+| Tool | Backed by |
+|---|---|
+| `create_workout(title, start_time, end_time, exercises, description?, is_private?)` | `POST /v1/workouts` |
+| `update_workout(workout_id, is_private, title?, description?, start_time?, end_time?, exercises?)` | `GET`, then `PUT /v1/workouts/{id}` |
+| `create_routine(title, exercises, folder_id?, notes?)` | `POST /v1/routines` |
+| `update_routine(routine_id, notes, title?, folder_id?, exercises?)` | `GET`, then `PUT /v1/routines/{id}` |
+| `create_routine_folder(title)` | `POST /v1/routine_folders` |
+| `create_exercise_template(title, exercise_type, equipment_category, muscle_group, other_muscles?)` | `POST /v1/exercise_templates` |
+| `create_body_measurement(date, measurements)` | `POST /v1/body_measurements` |
+| `update_body_measurement(date, changes?, clear?)` | `GET`, then `PUT /v1/body_measurements/{date}` |
+
+- Hevy's PUTs replace the whole record, so update tools read the current record, apply only the fields given, and send the result. A given `exercises` list replaces the old one. `clear` names body-measurement fields to empty.
+- Hevy doesn't return a workout's `is_private` or a routine's `notes`. Hevy resets both when they're left out (a live test showed it for notes), so `update_workout` requires `is_private` and `update_routine` requires `notes`.
+- Creates are retried only on 429 or a connection that never opened. A timeout, a dropped connection or a 5xx after sending gives an error that says the create may have happened. Updates are retried like reads.
+- On `POST /v1/routines` and `POST /v1/exercise_templates`, Hevy uses 403 for its routine and custom-exercise limits, so it's reported as a limit, not an auth failure. 409 (a body measurement already logged that day) is reported as a conflict.
+- Write inputs refuse unknown fields and check Hevy's enums (set type, RPE, exercise type, equipment, muscle group), non-negative numbers and rep ranges before anything is sent.
+- Creating a custom exercise clears the template cache.
 
 - Range tools cap how many pages they walk (configurable, with a sensible default such as 50 pages, or 500 workouts). If the cap stops them early, the result says it was truncated.
 - Exercise templates are cached in memory with a short TTL, because they change rarely and `search_exercise_templates` and `get_training_summary` both need the full list.
@@ -147,7 +177,8 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 - Canned Hevy responses are fixture files modelled on the example payloads in Hevy's OpenAPI document. This keeps fixtures realistic and makes API drift easy to spot. Fixtures must be synthetic: the repository is public, so real workouts or body measurements from my account must never be committed.
 - **What makes a good test:** it asserts only on what an MCP client sees, meaning the tool list and its schemas, tool results, and tool errors. It also checks which Hevy requests were made (path, query and the presence of the `api-key` header). It never imports or asserts on internal functions or classes. If an internal refactor breaks a test without changing tool behaviour, the test is wrong.
 - **Behaviours to cover:**
-  - Every tool is listed and marked read-only.
+  - Every tool is listed and marked read-only, unless writes are on. Then the write tools are listed too, with write annotations.
+  - Each write tool sends the expected body. Updates keep fields they weren't given, creates aren't retried after a failure Hevy may have acted on, and limits and conflicts give their own errors.
   - Each tool's happy path.
   - Pagination: page-size clamping, page counts, and range tools stopping at the start date, plus the truncation flag.
   - `search_exercise_templates` matches across several template pages.
@@ -172,7 +203,8 @@ A small, self-hosted MCP server that exposes my Hevy data as read-only MCP tools
 
 ## Out of Scope
 
-- Any write operations: creating or updating workouts, routines, routine folders, exercise templates or body measurements. Hevy's API supports these, but this server is read-only for now.
+- Deleting anything. Hevy's API has no delete endpoints.
+- Updating routine folders or custom exercises. Hevy's API can only create them.
 - An OAuth server, client registration or token storage in the MCP server itself. Cloudflare Access does that, and the server only checks the JWT Access forwards. ADR 0001 records why FastMCP's OAuth proxy, a static bearer token and a token in the URL were rejected.
 - Multiple Hevy accounts or multiple users.
 - Persistent storage, a local database, or background sync of Hevy data. The server is stateless apart from a short in-memory template cache.

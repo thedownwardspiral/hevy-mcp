@@ -3,9 +3,14 @@
 Hevy warns that its API may change, so every model keeps unknown fields and
 treats almost every field as optional. Field names keep Hevy's unit suffixes
 (``weight_kg``, ``distance_meters``) so that units are never ambiguous.
+
+The ``*Input`` models at the end are the opposite: tool inputs for writes,
+which refuse unknown fields so that a misspelt one isn't silently dropped.
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class HevyModel(BaseModel):
@@ -259,3 +264,155 @@ class RoutineFolderPage(HevyModel):
     page: int | None = None
     page_count: int | None = None
     routine_folders: list[RoutineFolder] = []
+
+
+class HevyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+type SetType = Literal["warmup", "normal", "failure", "dropset"]
+type Rpe = Literal[6, 7, 7.5, 8, 8.5, 9, 9.5, 10]
+type NonNegative = Annotated[float, Field(ge=0)]
+type Count = Annotated[int, Field(ge=0)]
+TemplateId = Annotated[
+    str,
+    Field(min_length=1, description="Find it with search_exercise_templates."),
+]
+SupersetId = Annotated[
+    int | None, Field(description="Exercises sharing a superset_id are done as a superset.")
+]
+
+
+class WorkoutSetInput(HevyInput):
+    type: SetType = "normal"
+    weight_kg: NonNegative | None = None
+    reps: Count | None = None
+    distance_meters: Count | None = None
+    duration_seconds: Count | None = None
+    custom_metric: float | None = Field(None, description="Steps or floors, for those exercises.")
+    rpe: Rpe | None = None
+
+
+class WorkoutExerciseInput(HevyInput):
+    exercise_template_id: TemplateId
+    superset_id: SupersetId = None
+    notes: str | None = None
+    sets: list[WorkoutSetInput] = Field(min_length=1)
+
+
+class RepRangeInput(HevyInput):
+    start: Annotated[int, Field(ge=1)]
+    end: Annotated[int, Field(ge=1)]
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.end < self.start:
+            raise ValueError(f"rep_range end ({self.end}) is below its start ({self.start})")
+        return self
+
+
+class RoutineSetInput(HevyInput):
+    type: SetType = "normal"
+    weight_kg: NonNegative | None = None
+    reps: Count | None = None
+    rep_range: RepRangeInput | None = Field(None, description="Planned reps as a range, e.g. 8-12.")
+    distance_meters: Count | None = None
+    duration_seconds: Count | None = None
+    custom_metric: float | None = Field(None, description="Steps or floors, for those exercises.")
+
+
+class RoutineExerciseInput(HevyInput):
+    exercise_template_id: TemplateId
+    superset_id: SupersetId = None
+    rest_seconds: Count | None = None
+    notes: str | None = None
+    sets: list[RoutineSetInput] = Field(min_length=1)
+
+
+class BodyMeasurementInput(HevyInput):
+    """Body measurement values; circumferences are in cm, including the five
+    whose names carry no unit."""
+
+    weight_kg: NonNegative | None = None
+    lean_mass_kg: NonNegative | None = None
+    fat_percent: Annotated[float, Field(ge=0, le=100)] | None = None
+    neck_cm: NonNegative | None = None
+    shoulder_cm: NonNegative | None = None
+    chest_cm: NonNegative | None = None
+    left_bicep_cm: NonNegative | None = None
+    right_bicep_cm: NonNegative | None = None
+    left_forearm_cm: NonNegative | None = None
+    right_forearm_cm: NonNegative | None = None
+    abdomen: NonNegative | None = None
+    waist: NonNegative | None = None
+    hips: NonNegative | None = None
+    left_thigh: NonNegative | None = None
+    right_thigh: NonNegative | None = None
+    left_calf: NonNegative | None = None
+    right_calf: NonNegative | None = None
+
+
+# The names of BodyMeasurementInput's fields; a test keeps the two in step.
+type MeasurementField = Literal[
+    "weight_kg",
+    "lean_mass_kg",
+    "fat_percent",
+    "neck_cm",
+    "shoulder_cm",
+    "chest_cm",
+    "left_bicep_cm",
+    "right_bicep_cm",
+    "left_forearm_cm",
+    "right_forearm_cm",
+    "abdomen",
+    "waist",
+    "hips",
+    "left_thigh",
+    "right_thigh",
+    "left_calf",
+    "right_calf",
+]
+
+type ExerciseType = Literal[
+    "weight_reps",
+    "reps_only",
+    "bodyweight_reps",
+    "bodyweight_assisted_reps",
+    "duration",
+    "weight_duration",
+    "distance_duration",
+    "short_distance_weight",
+]
+type EquipmentCategory = Literal[
+    "none",
+    "barbell",
+    "dumbbell",
+    "kettlebell",
+    "machine",
+    "plate",
+    "resistance_band",
+    "suspension",
+    "other",
+]
+type MuscleGroup = Literal[
+    "abdominals",
+    "shoulders",
+    "biceps",
+    "triceps",
+    "forearms",
+    "quadriceps",
+    "hamstrings",
+    "calves",
+    "glutes",
+    "abductors",
+    "adductors",
+    "lats",
+    "upper_back",
+    "traps",
+    "lower_back",
+    "chest",
+    "cardio",
+    "neck",
+    "full_body",
+    "other",
+]

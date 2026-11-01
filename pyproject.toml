@@ -1,7 +1,7 @@
 [project]
 name = "hevy-mcp"
 version = "0.1.0"
-description = "Read-only MCP server for Hevy workout and body-measurement data"
+description = "MCP server for Hevy workout and body-measurement data, read-only unless writes are enabled"
 authors = [
     { name = "thedownwardspiral", email = "12749614+thedownwardspiral@users.noreply.github.com" }
 ]
