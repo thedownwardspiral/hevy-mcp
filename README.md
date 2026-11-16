@@ -324,7 +324,7 @@ Once Access is configured, the home-network hostname only answers `/health`. Eve
 
 ## Development
 
-You need [uv](https://docs.astral.sh/uv/). It installs Python 3.14 if needed.
+You need [uv](https://docs.astral.sh/uv/). It installs Python 3.15 if needed.
 
 ```bash
 uv sync
