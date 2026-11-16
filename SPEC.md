@@ -73,7 +73,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 ## Implementation Decisions
 
 **Stack**
-- Python 3.14, with dependencies managed by `uv` and a lockfile committed.
+- Python 3.15, with dependencies managed by `uv` and a lockfile committed.
 - FastMCP 4.x (the latest release at the time of writing is 4.1.4), pinned `>=4.1,<5`. Server-initiated sampling and roots were removed in 4.0 and are not needed here.
 - `httpx` async client for Hevy calls, and Pydantic models for Hevy response shapes.
 
@@ -150,7 +150,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 - Dates are ISO 8601. Date-only inputs are interpreted in the server's configured timezone (`TZ`, default UTC).
 
 **Container and deployment**
-- A multi-stage Dockerfile with a `uv` build stage and a `python:3.14-slim` runtime stage. It runs as a non-root user, exposes port 8000 inside the container only, and has a `HEALTHCHECK` that hits `/health`.
+- A multi-stage Dockerfile with a `uv` build stage and a `python:3.15-slim` runtime stage. It runs as a non-root user, exposes port 8000 inside the container only, and has a `HEALTHCHECK` that hits `/health`.
 - A Compose file defines one service with `restart: unless-stopped` and no `ports:` mapping. The service pulls the image from GHCR rather than building it. The Vault AppRole role ID and secret ID are mounted as Docker secrets, the internal CA bundle is mounted read-only, and the Hevy API key itself is never in the Compose setup. The service attaches to the existing Traefik external network, whose name is set by a variable because Traefik runs in its own Compose project.
 - Traefik is configured through labels on the service: `traefik.enable=true`, a router, the entrypoint matching the existing Traefik setup, and a service pointing at port 8000. Response buffering must not break streaming, so no buffering middleware is added.
   - The router's `Host()` rule matches both the public hostname (such as `hevy-mcp.example.com`), which the tunnel sends as the Host header, and the home-network hostname (such as `hevy-mcp.home.example`). Both are placeholders.

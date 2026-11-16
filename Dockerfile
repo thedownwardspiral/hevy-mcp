@@ -2,7 +2,7 @@
 
 # Build stage: resolve the locked dependencies and install the server into a
 # virtualenv with uv. Nothing from this stage but the virtualenv is kept.
-FROM python:3.14-slim@sha256:c2aca8207dfb68e7d20fecb7fad7e145c5d79d2ff36712d416c144130606d71d AS build
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS build
 COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -15,7 +15,7 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 # Runtime stage: the same slim Python, the virtualenv and a non-root user.
-FROM python:3.14-slim@sha256:c2aca8207dfb68e7d20fecb7fad7e145c5d79d2ff36712d416c144130606d71d
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 LABEL org.opencontainers.image.title="hevy-mcp" \
       org.opencontainers.image.description="MCP server for Hevy workout and body-measurement data, read-only unless writes are enabled" \
       org.opencontainers.image.source="https://github.com/thedownwardspiral/hevy-mcp"
