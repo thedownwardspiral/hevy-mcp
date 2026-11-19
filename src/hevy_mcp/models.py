@@ -117,7 +117,7 @@ class ExerciseSummary(BaseModel):
     title: str | None
     sets: int
     reps: Number
-    volume_kg: Number
+    volume_kg: Number | None = Field(description="None if weight_kg x reps overflowed.")
     top_weight_kg: Number | None
 
 
@@ -131,7 +131,9 @@ class TrainingSummary(BaseModel):
     end_date: str
     workout_count: int
     total_duration_seconds: Number
-    total_volume_kg: Number = Field(description="Sum of weight_kg x reps over working sets.")
+    total_volume_kg: Number | None = Field(
+        description="Sum of weight_kg x reps over working sets; None if it overflowed."
+    )
     total_sets: int = Field(description="Working sets; warm-ups are excluded throughout.")
     total_reps: Number
     exercises: list[ExerciseSummary]

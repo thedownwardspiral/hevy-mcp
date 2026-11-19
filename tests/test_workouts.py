@@ -1,5 +1,8 @@
 """Workout tools: listing, details, count, events, range queries and the training summary."""
 
+import json
+
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -374,3 +377,44 @@ async def test_training_summary_flags_truncated_templates(make_client, fake):
         )
 
     assert result.structured_content["truncated"] is True
+
+
+async def test_non_finite_numbers_from_hevy_become_null(client, fake):
+    # JSON has no NaN or Infinity, but Python's parser accepts them and reads an
+    # out-of-range literal like 1e999 as inf. FastMCP fails the whole tool call
+    # on a non-finite float, so one bad value would hide the workout.
+    workout = load("hevy/workout.json")
+    working_set = workout["exercises"][0]["sets"][1]
+    working_set |= {"weight_kg": 424242.5, "rpe": float("nan"), "score": float("-inf")}
+    body = json.dumps(workout).replace("424242.5", "1e999")
+    fake.get(
+        "/v1/workouts/b459cba5-cd6d-463c-abd6-54f8eafcadcb",
+        httpx.Response(200, content=body, headers={"content-type": "application/json"}),
+    )
+
+    result = await client.call_tool(
+        "get_workout", {"workout_id": "b459cba5-cd6d-463c-abd6-54f8eafcadcb"}
+    )
+
+    returned = result.structured_content["exercises"][0]["sets"][1]
+    assert returned["weight_kg"] is None
+    assert returned["rpe"] is None
+    assert returned["score"] is None
+    assert returned["reps"] == 8
+
+
+async def test_training_summary_reports_overflowing_volume_as_null(client, fake):
+    workout = load("hevy/workout.json")
+    workout["exercises"][0]["sets"][1] |= {"weight_kg": 1e200, "reps": 1e200}
+    fake.get("/v1/workouts", json=page("workouts", [workout]))
+    fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates.json"))
+
+    result = await client.call_tool(
+        "get_training_summary", {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+    )
+
+    summary = result.structured_content
+    assert summary["total_volume_kg"] is None
+    [overflowed] = [e for e in summary["exercises"] if e["volume_kg"] is None]
+    assert overflowed["top_weight_kg"] == 1e200
+    assert all(e["volume_kg"] is not None for e in summary["exercises"] if e is not overflowed)
