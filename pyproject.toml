@@ -21,6 +21,11 @@ hevy-mcp = "hevy_mcp.server:main"
 requires = ["uv_build>=0.13.6,<0.14.0"]
 build-backend = "uv_build"
 
+[tool.uv]
+# Match Dependabot's 7-day cooldown for every relock, manual ones included, so a
+# release that turns out to be compromised has a week to be caught and yanked.
+exclude-newer = "7 days"
+
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
