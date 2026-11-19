@@ -6,6 +6,7 @@ with jittered backoff, and mapping status codes to the domain errors below.
 
 import asyncio
 import logging
+import math
 import random
 import time
 from collections.abc import Callable
@@ -466,13 +467,23 @@ class HevyClient:
 
 def _body(response: httpx.Response) -> Any:
     """A success response's JSON, or its text when it isn't JSON (creating a
-    custom exercise answers with the bare id), or None when it is empty."""
+    custom exercise answers with the bare id), or None when it is empty.
+
+    NaN, Infinity and out-of-range literals like 1e999 are read as None. JSON
+    has no non-finite numbers and FastMCP fails a tool call that returns one,
+    so a single bad value would otherwise hide everything around it.
+    """
     if not response.content:
         return None
     try:
-        return response.json()
+        return response.json(parse_float=_finite_or_none, parse_constant=lambda _: None)
     except ValueError:
         return response.text.strip()
+
+
+def _finite_or_none(literal: str) -> float | None:
+    value = float(literal)
+    return value if math.isfinite(value) else None
 
 
 def _error_detail(response: httpx.Response) -> str:

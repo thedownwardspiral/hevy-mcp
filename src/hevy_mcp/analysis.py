@@ -1,5 +1,6 @@
 """Derived statistics over workouts. Pure functions, no I/O."""
 
+import math
 from collections import Counter
 from collections.abc import Iterable
 from datetime import tzinfo
@@ -72,13 +73,15 @@ def training_summary(
 
     ranked = sorted(exercises.values(), key=lambda e: (-e.sets, e.title or ""))
     for e in ranked:
-        e.volume_kg = round(e.volume_kg, 2)
+        e.volume_kg = _rounded_volume(e.volume_kg)
+    volumes = [e.volume_kg for e in ranked]
+    total_volume = None if None in volumes else _rounded_volume(sum(volumes))
     return TrainingSummary(
         start_date=period.start.isoformat(),
         end_date=period.end.isoformat(),
         workout_count=len(workouts),
         total_duration_seconds=round(duration),
-        total_volume_kg=round(sum(e.volume_kg for e in ranked), 2),
+        total_volume_kg=total_volume,
         total_sets=sum(e.sets for e in ranked),
         total_reps=sum(e.reps for e in ranked),
         exercises=ranked,
@@ -88,3 +91,13 @@ def training_summary(
         ],
         truncated=truncated,
     )
+
+
+def _rounded_volume(volume: float | None) -> float | None:
+    """The volume rounded to 2 places, or None if weight x reps overflowed.
+
+    JSON can't carry infinity, and FastMCP fails the whole tool call on one.
+    """
+    if volume is None or not math.isfinite(volume):
+        return None
+    return round(volume, 2)
