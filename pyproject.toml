@@ -7,8 +7,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "fastmcp>=4.2.0,<5",
+    "fastmcp[apps]>=4.2.5,<5",
     "httpx>=0.28.1",
+    "prefab-ui==0.21.1",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.3",
     "pyjwt[crypto]>=2.15.1",

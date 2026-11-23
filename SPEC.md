@@ -136,6 +136,8 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 | `update_routine(routine_id, notes, title?, folder_id? (an id or "my_routines"), exercises?)` | `GET`, then `PUT /v1/routines/{id}` |
 | `create_routine_folder(title)` | `POST /v1/routine_folders` |
 | `create_plan(title, routines)` | `POST /v1/routine_folders`, then `POST /v1/routines` for each routine with the new folder's id; stops at the first refusal |
+| `preview_plan(title, routines)` | Reads the exercise templates and `GET /v1/user/info`, keeps the checked plan in memory under a one-time `preview_id`, and returns an MCP Apps UI (Prefab) showing it; writes nothing. See ADR 0004 |
+| `save_plan(preview_id)` | Saves the plan stored under that id as `create_plan` does, then forgets it, so each preview saves at most once |
 | `create_exercise_template(title, exercise_type, equipment_category, muscle_group, other_muscles?)` | `POST /v1/exercise_templates` |
 | `create_body_measurement(date, measurements)` | `POST /v1/body_measurements` |
 | `update_body_measurement(date, changes?, clear?)` | `GET`, then `PUT /v1/body_measurements/{date}` |

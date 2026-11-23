@@ -8,11 +8,13 @@ from importlib.metadata import version
 from typing import Annotated, Any, Literal
 
 import httpx
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
+from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.tools import ToolResult
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
 from starlette.requests import Request
@@ -72,6 +74,13 @@ from hevy_mcp.models import (
     WorkoutExerciseInput,
     WorkoutPage,
     WorkoutRange,
+)
+from hevy_mcp.plan_preview import (
+    PendingPlan,
+    PendingPlans,
+    plan_summary,
+    plan_view,
+    text_only_summary,
 )
 from hevy_mcp.secrets import SecretSourceError, resolve_api_key
 
@@ -143,6 +152,8 @@ see, so convert what the user says into kg and metres before writing.
 The create_ and update_ tools change the user's real Hevy data. Confirm what
 you are about to write with the user first. Hevy's API cannot delete
 anything, so a mistaken create can only be removed in the Hevy app.
+To create a plan, show it with preview_plan first, and save it with save_plan
+once the user confirms (its Save to Hevy button sends a message asking for it).
 """
 
 
@@ -446,6 +457,7 @@ def create_server(
 
     if settings.hevy_enable_writes:
         _add_write_tools(mcp, state, settings)
+        _add_plan_preview(mcp, state)
     return mcp
 
 
@@ -502,6 +514,61 @@ def _unfinished_plan(
 
 # Hevy answered with a refusal, so that request changed nothing.
 _REFUSALS = (HevyAuthError, HevyConflict, HevyLimitReached, HevyNotFound, HevyRequestError)
+
+
+def _plan_bodies(routines: list[PlanRoutineInput]) -> list[dict[str, Any]]:
+    """Each routine's request body, built before any write so bad input creates nothing."""
+    return [
+        {
+            "title": routine.title,
+            "notes": routine.notes,
+            "exercises": _dump_routine(routine.exercises),
+        }
+        for routine in routines
+    ]
+
+
+async def _save_plan(state: _State, tool: str, title: str, bodies: list[dict[str, Any]]) -> Plan:
+    """Create a routine folder and then each routine in it, journaling every write."""
+    folder = await _journaled(
+        state.journal,
+        tool,
+        "routine_folder",
+        {"title": title},
+        lambda: state.hevy.create_routine_folder(title),
+        created_id=lambda created: created.id,
+    )
+    if folder.id is None:
+        # Without an id the routines would land in "My Routines" instead.
+        raise ToolError(
+            f"Hevy created routine folder {title!r} but didn't return its id, so no "
+            "routines were created. Find the folder with list_routine_folders and add "
+            "the routines with create_routine and its folder_id, instead of creating "
+            "the plan again."
+        )
+    created: list[Routine] = []
+    for body in bodies:
+        routine = body | {"folder_id": folder.id}
+        try:
+            created.append(
+                await _journaled(
+                    state.journal,
+                    tool,
+                    "routine",
+                    routine,
+                    # partial binds this routine now; a lambda would close over
+                    # the loop variable (ruff B023).
+                    partial(state.hevy.create_routine, routine),
+                    created_id=lambda new: new.id,
+                )
+            )
+        except Exception as exc:
+            # Anything that goes wrong here leaves a folder behind, so the
+            # client must hear what exists rather than a generic error.
+            raise ToolError(
+                _unfinished_plan(folder, created, body["title"], len(bodies), exc)
+            ) from None
+    return Plan(folder=folder, routines=created)
 
 
 async def _journaled[R](
@@ -738,52 +805,7 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         routine, for example at its routine limit, this stops and says what was
         already created; Hevy's API can't delete, so finish the plan from there
         rather than starting it again."""
-        # Build every routine before the first write, so bad input creates nothing.
-        bodies = [
-            {
-                "title": routine.title,
-                "notes": routine.notes,
-                "exercises": _dump_routine(routine.exercises),
-            }
-            for routine in routines
-        ]
-        folder = await journaled(
-            "create_plan",
-            "routine_folder",
-            {"title": title},
-            lambda: state.hevy.create_routine_folder(title),
-            created_id=lambda created: created.id,
-        )
-        if folder.id is None:
-            # Without an id the routines would land in "My Routines" instead.
-            raise ToolError(
-                f"Hevy created routine folder {title!r} but didn't return its id, so no "
-                "routines were created. Find the folder with list_routine_folders and add "
-                "the routines with create_routine and its folder_id, instead of creating "
-                "the plan again."
-            )
-        created: list[Routine] = []
-        for body in bodies:
-            routine = body | {"folder_id": folder.id}
-            try:
-                created.append(
-                    await journaled(
-                        "create_plan",
-                        "routine",
-                        routine,
-                        # partial binds this routine now; a lambda would close over
-                        # the loop variable (ruff B023).
-                        partial(state.hevy.create_routine, routine),
-                        created_id=lambda new: new.id,
-                    )
-                )
-            except Exception as exc:
-                # Anything that goes wrong here leaves a folder behind, so the
-                # client must hear what exists rather than a generic error.
-                raise ToolError(
-                    _unfinished_plan(folder, created, body["title"], len(bodies), exc)
-                ) from None
-        return Plan(folder=folder, routines=created)
+        return await _save_plan(state, "create_plan", title, _plan_bodies(routines))
 
     @mcp.tool(annotations=CREATES)
     async def create_exercise_template(
@@ -877,6 +899,64 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             before=before,
         )
         return BodyMeasurement(date=day.isoformat(), **values)
+
+
+def _add_plan_preview(mcp: FastMCP, state: _State) -> None:
+    """Register preview_plan, which shows a plan as a card, and save_plan, which
+    saves a previewed plan once the user confirms. See plan_preview.py."""
+    pending = PendingPlans()
+
+    @mcp.tool(annotations=CREATES)
+    async def save_plan(
+        preview_id: Annotated[str, Field(description="The id preview_plan returned.")],
+    ) -> Plan:
+        """Save a plan shown with preview_plan, once the user has confirmed it: the
+        card's Save to Hevy button sends a message asking for it. It saves exactly
+        the plan that was previewed, and only once."""
+        plan = pending.take(preview_id)
+        if plan is None:
+            raise ToolError(
+                "That preview was already saved or has expired, so nothing was saved this "
+                "time. Check list_routine_folders before showing the plan again."
+            )
+        return await _save_plan(state, "save_plan", plan.title, plan.routines)
+
+    @mcp.tool(app=True, annotations=READ_ONLY)
+    async def preview_plan(
+        title: Annotated[
+            str, Field(description="The plan's name, which becomes its routine folder's title.")
+        ],
+        routines: Annotated[
+            list[PlanRoutineInput],
+            Field(min_length=1, description="The plan's routines, in order."),
+        ],
+        ctx: Context,
+    ) -> ToolResult:
+        """Show the user a plan (a new routine folder holding several routines, such
+        as the days of a split) as a card with a Save to Hevy button, before
+        anything is saved. It takes the same arguments as create_plan and returns a
+        preview_id; once the user confirms, save it with save_plan. To change the
+        plan, call this again with the change."""
+        bodies = _plan_bodies(routines)
+        templates, truncated = await state.hevy.all_exercise_templates()
+        titles = {t.id: t.title or t.id for t in templates if t.id}
+        wanted = {e["exercise_template_id"] for body in bodies for e in body["exercises"]}
+        if unknown := sorted(wanted - titles.keys()):
+            if not truncated:
+                raise ToolError(
+                    f"No exercise template has the id {', '.join(unknown)}. Find each "
+                    "exercise_template_id with search_exercise_templates."
+                )
+            # The template list was cut short, so the id may be one it didn't reach.
+            titles |= {template_id: f"Exercise {template_id}" for template_id in unknown}
+        user = await state.hevy.user_info()
+        units = (user.weight_unit or "kg", user.distance_unit or "kilometers")
+        plan = PendingPlan(title=title, routines=bodies)
+        preview_id = pending.add(plan)
+        if not ctx.client_supports_extension(UI_EXTENSION_ID):
+            return ToolResult(content=text_only_summary(plan, titles, preview_id, units))
+        view = plan_view(plan, titles, *units, preview_id=preview_id)
+        return ToolResult(content=plan_summary(plan, titles, preview_id), structured_content=view)
 
 
 def _stored_time(value: str | None) -> str:

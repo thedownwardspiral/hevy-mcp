@@ -67,6 +67,7 @@ These are only there when `HEVY_ENABLE_WRITES=true`. They change your real Hevy 
 | `create_routine` / `update_routine` | Creates or changes a routine, with rest times and planned sets including rep ranges |
 | `create_routine_folder` | Creates a routine folder, placed first |
 | `create_plan` | Creates a routine folder and several routines in it in one call; if Hevy refuses a routine, it stops and says what was already created |
+| `preview_plan` / `save_plan` | `preview_plan` shows a plan as a card in the chat, with exercise names and weights in your units, and saves nothing. Its **Save to Hevy** button posts a message asking for it to be saved (or just say so), and the assistant calls `save_plan` with the preview's id. That saves exactly the plan you saw, once. Clients that can't show the card get the plan as text and save it the same way |
 | `create_exercise_template` | Creates a custom exercise |
 | `create_body_measurement` / `update_body_measurement` | Logs or changes the day's measurements. `clear` erases named fields |
 
