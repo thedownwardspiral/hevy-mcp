@@ -100,8 +100,10 @@ async def test_preview_shows_the_plan_and_writes_nothing(ui_writer, hevy):
     text = result.content[0].text
     assert "call save_plan with that preview_id" in text and "Don't call create_plan" in text
     assert "Don't repeat the plan" in text
-    assert "1. Upper: Bench Press (Barbell)" in text
-    assert "2. Lower: Squat (Barbell)" in text
+    # In case the card doesn't appear, the model has the whole plan to show.
+    assert "didn't appear" in text
+    assert "   - Bench Press (Barbell): 3 × 8 reps @ 220.5 lb" in text
+    assert "   - Squat (Barbell): 5 reps @ 132.3 lb (warmup); 5 reps @ 308.6 lb; rest 3 min" in text
 
 
 async def test_the_button_asks_in_the_chat_and_calls_no_tool(ui_writer, hevy):
@@ -147,6 +149,34 @@ async def test_an_unknown_preview_saves_nothing(ui_writer, fake):
     assert writes(fake) == []
 
 
+async def test_a_save_hevy_refused_before_writing_can_be_tried_again(ui_writer, hevy):
+    folder = load("hevy/routine_folder.json") | {"title": "Upper Lower"}
+    hevy.post(
+        "/v1/routine_folders",
+        httpx.Response(400, json={"error": "bad request"}),
+        httpx.Response(201, json={"routine_folder": folder}),
+    )
+    arguments = {"preview_id": preview_id(await preview(ui_writer))}
+    with pytest.raises(ToolError, match="400"):
+        await ui_writer.call_tool("save_plan", arguments)
+
+    saved = await ui_writer.call_tool("save_plan", arguments)
+
+    assert saved.structured_content["folder"]["id"] == 42
+    assert len(hevy.hevy_requests("/v1/routines")) == 2
+
+
+async def test_a_save_that_may_have_written_the_folder_is_not_repeated(ui_writer, hevy):
+    # A lost answer to the folder's POST: Hevy may have created it.
+    hevy.post("/v1/routine_folders", httpx.Response(500, json={"error": "oops"}))
+    arguments = {"preview_id": preview_id(await preview(ui_writer))}
+    with pytest.raises(ToolError):
+        await ui_writer.call_tool("save_plan", arguments)
+
+    with pytest.raises(ToolError, match="already saved or has expired"):
+        await ui_writer.call_tool("save_plan", arguments)
+
+
 async def test_a_plan_that_stops_partway_says_what_exists(ui_writer, hevy):
     hevy.post(
         "/v1/routines",
@@ -170,15 +200,28 @@ async def test_saving_is_journaled_as_save_plan(ui_writer, hevy, tmp_path):
     assert [e["outcome"] for e in journal if "outcome" in e] == ["ok", "ok", "ok"]
 
 
-async def test_an_unknown_exercise_is_refused_before_anything_is_shown(ui_writer, fake):
-    fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates.json"))
+async def test_an_unknown_exercise_is_refused_before_anything_is_shown(ui_writer, hevy):
+    hevy.get("/v1/exercise_templates/NOPE", status=404, json={"error": "not found"})
     unknown = BENCH | {"exercise_template_id": "NOPE"}
     plan = {"title": "Odd", "routines": [{"title": "A", "exercises": [unknown]}]}
 
     with pytest.raises(ToolError, match="NOPE.*search_exercise_templates"):
         await preview(ui_writer, plan)
 
-    assert writes(fake) == []
+    assert writes(hevy) == []
+
+
+async def test_an_exercise_the_template_list_lacks_is_looked_up(ui_writer, hevy):
+    # Made in the Hevy app after the list was cached, or past its page cap.
+    template = load("hevy/exercise_template.json") | {"id": "NEW1", "title": "Cable Fly"}
+    hevy.get("/v1/exercise_templates/NEW1", json=template)
+    fly = BENCH | {"exercise_template_id": "NEW1"}
+    plan = {"title": "Chest", "routines": [{"title": "A", "exercises": [fly]}]}
+
+    result = await preview(ui_writer, plan)
+
+    assert "Cable Fly" in json.dumps(result.structured_content)
+    assert "   - Cable Fly: 3 × 8 reps @ 220.5 lb" in result.content[0].text
 
 
 async def test_a_client_without_ui_gets_the_plan_as_text_and_saves_the_same_way(writer, hevy):
@@ -187,7 +230,10 @@ async def test_a_client_without_ui_gets_the_plan_as_text_and_saves_the_same_way(
     assert result.structured_content is None
     text = result.content[0].text
     assert "can't show the preview card" in text
+    # Everything save_plan will write: notes, sets, rest times.
+    assert "   Notes: Heavy" in text
     assert "   - Bench Press (Barbell): 3 × 8 reps @ 220.5 lb" in text
+    assert "rest 3 min" in text
     assert writes(hevy) == []
     await writer.call_tool("save_plan", {"preview_id": preview_id(result)})
     assert len(hevy.hevy_requests("/v1/routines")) == 2
@@ -217,6 +263,27 @@ async def test_the_preview_tools_need_writes_enabled(client, writer):
 def test_sets_read_as_one_line(sets, unit, text):
     distance_unit = "miles" if unit == "lbs" else "kilometers"
     assert describe_sets(sets, unit, distance_unit) == text
+
+
+async def test_the_text_plan_shows_supersets_and_exercise_notes(writer, hevy):
+    curl = {"exercise_template_id": "05293BCA", "superset_id": 0, "notes": "Slow negatives"}
+    plan = {
+        "title": "Arms",
+        "routines": [
+            {
+                "title": "A",
+                "exercises": [
+                    curl | {"sets": [{"reps": 10}]},
+                    {"exercise_template_id": "D04AC939", "superset_id": 0, "sets": [{"reps": 5}]},
+                ],
+            }
+        ],
+    }
+
+    text = (await preview(writer, plan)).content[0].text
+
+    assert "   - Bench Press (Barbell): 10 reps; superset A\n     Notes: Slow negatives" in text
+    assert "   - Squat (Barbell): 5 reps; superset A" in text
 
 
 def test_supersets_are_lettered_in_order_of_appearance():

@@ -1,5 +1,6 @@
 """The FastMCP app: tool registration, error mapping and the health route."""
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -41,6 +42,7 @@ from hevy_mcp.hevy import (
     HevyLimitReached,
     HevyNotFound,
     HevyRequestError,
+    HevyWriteUncertain,
 )
 from hevy_mcp.hosts import allowed_hosts_middleware
 from hevy_mcp.journal import Journal, JournalError
@@ -919,7 +921,15 @@ def _add_plan_preview(mcp: FastMCP, state: _State) -> None:
                 "That preview was already saved or has expired, so nothing was saved this "
                 "time. Check list_routine_folders before showing the plan again."
             )
-        return await _save_plan(state, "save_plan", plan.title, plan.routines)
+        try:
+            return await _save_plan(state, "save_plan", plan.title, plan.routines)
+        except HevyError as exc:
+            # Only the folder's create gets here: _save_plan turns a routine's
+            # failure into a ToolError. If Hevy can't have saved the folder,
+            # nothing exists yet, so the same preview may be saved again.
+            if not isinstance(exc, HevyWriteUncertain) and not exc.maybe_applied:
+                pending.put_back(preview_id, plan)
+            raise
 
     @mcp.tool(app=True, annotations=READ_ONLY)
     async def preview_plan(
@@ -938,25 +948,45 @@ def _add_plan_preview(mcp: FastMCP, state: _State) -> None:
         preview_id; once the user confirms, save it with save_plan. To change the
         plan, call this again with the change."""
         bodies = _plan_bodies(routines)
-        templates, truncated = await state.hevy.all_exercise_templates()
-        titles = {t.id: t.title or t.id for t in templates if t.id}
         wanted = {e["exercise_template_id"] for body in bodies for e in body["exercises"]}
-        if unknown := sorted(wanted - titles.keys()):
-            if not truncated:
-                raise ToolError(
-                    f"No exercise template has the id {', '.join(unknown)}. Find each "
-                    "exercise_template_id with search_exercise_templates."
-                )
-            # The template list was cut short, so the id may be one it didn't reach.
-            titles |= {template_id: f"Exercise {template_id}" for template_id in unknown}
-        user = await state.hevy.user_info()
+        titles, user = await asyncio.gather(_template_titles(state, wanted), state.hevy.user_info())
         units = (user.weight_unit or "kg", user.distance_unit or "kilometers")
         plan = PendingPlan(title=title, routines=bodies)
         preview_id = pending.add(plan)
         if not ctx.client_supports_extension(UI_EXTENSION_ID):
             return ToolResult(content=text_only_summary(plan, titles, preview_id, units))
         view = plan_view(plan, titles, *units, preview_id=preview_id)
-        return ToolResult(content=plan_summary(plan, titles, preview_id), structured_content=view)
+        summary = plan_summary(plan, titles, preview_id, units)
+        return ToolResult(content=summary, structured_content=view)
+
+
+async def _template_titles(state: _State, wanted: set[str]) -> dict[str, str]:
+    """Each wanted exercise template's title, refusing an id that isn't a template.
+
+    The cached list may have been cut short by the page cap, or be older than a
+    template made in the Hevy app, so an id it lacks is looked up on its own
+    before it is refused. Saving a plan with a bad id would leave its folder
+    behind, which the API can't delete.
+    """
+    templates, _ = await state.hevy.all_exercise_templates()
+    titles = {t.id: t.title or t.id for t in templates if t.id in wanted}
+    unknown = sorted(wanted - titles.keys())
+
+    async def lookup(template_id: str) -> ExerciseTemplate | None:
+        try:
+            return await state.hevy.exercise_template(template_id)
+        except HevyNotFound:
+            return None
+
+    looked_up = dict(zip(unknown, await asyncio.gather(*map(lookup, unknown)), strict=True))
+    if missing := [template_id for template_id, t in looked_up.items() if t is None]:
+        raise ToolError(
+            f"No exercise template has the id {', '.join(missing)}. Find each "
+            "exercise_template_id with search_exercise_templates."
+        )
+    return titles | {
+        template_id: t.title or template_id for template_id, t in looked_up.items() if t
+    }
 
 
 def _stored_time(value: str | None) -> str:

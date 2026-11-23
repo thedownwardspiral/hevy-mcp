@@ -37,7 +37,7 @@ WRITE_TOOLS = {
     "create_exercise_template": "create",
     "create_body_measurement": "create",
     "update_body_measurement": "update",
-    # The plan preview's Save to Hevy button.
+    # Saves a plan shown with preview_plan, once the user asks.
     "save_plan": "create",
 }
 # Listed only with writes on, though it only shows a plan.

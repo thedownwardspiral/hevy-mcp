@@ -74,13 +74,18 @@ class PendingPlans:
         self._plans: dict[str, tuple[float, PendingPlan]] = {}
 
     def add(self, plan: PendingPlan) -> str:
+        preview_id = secrets.token_urlsafe(16)
+        self.put_back(preview_id, plan)
+        return preview_id
+
+    def put_back(self, preview_id: str, plan: PendingPlan) -> None:
+        """Keep a plan under this id again, for a save that Hevy refused before
+        writing anything, so the same preview can still be saved."""
         self._expire()
         while len(self._plans) >= self._limit:
             # Dicts keep insertion order, so this drops the oldest preview.
             del self._plans[next(iter(self._plans))]
-        preview_id = secrets.token_urlsafe(16)
         self._plans[preview_id] = (self._clock() + self._seconds, plan)
-        return preview_id
 
     def take(self, preview_id: str) -> PendingPlan | None:
         """The plan, removed so it can't be saved twice; None if it's gone."""
@@ -151,18 +156,25 @@ def describe_sets(sets: list[dict[str, Any]], weight_unit: str, distance_unit: s
     return "; ".join(text if count == 1 else f"{count} × {text}" for text, count in runs)
 
 
-def _outline(plan: PendingPlan, titles: dict[str, str], units: tuple[str, str] | None) -> list[str]:
-    """The plan as text: exercise names only, or with sets when units are given."""
+def _outline(plan: PendingPlan, titles: dict[str, str], units: tuple[str, str]) -> list[str]:
+    """The plan as text, with everything the card shows and save_plan saves:
+    notes, sets in the user's units, rest times and supersets."""
     lines = [f"Routine folder: {plan.title}"]
     for n, routine in enumerate(plan.routines, 1):
-        if units is None:
-            names = ", ".join(titles[e["exercise_template_id"]] for e in routine["exercises"])
-            lines.append(f"{n}. {routine['title']}: {names}")
-            continue
         lines.append(f"{n}. {routine['title']}")
+        if routine.get("notes"):
+            lines.append(f"   Notes: {routine['notes']}")
+        supersets = superset_labels(routine["exercises"])
         for exercise in routine["exercises"]:
-            planned = describe_sets(exercise["sets"], *units)
-            lines.append(f"   - {titles[exercise['exercise_template_id']]}: {planned}")
+            details = [describe_sets(exercise["sets"], *units)]
+            if rest := exercise.get("rest_seconds"):
+                details.append(f"rest {_duration(rest)}")
+            if (superset_id := exercise.get("superset_id")) is not None:
+                details.append(f"superset {supersets[superset_id]}")
+            title = titles[exercise["exercise_template_id"]]
+            lines.append(f"   - {title}: {'; '.join(details)}")
+            if exercise.get("notes"):
+                lines.append(f"     Notes: {exercise['notes']}")
     return lines
 
 
@@ -181,16 +193,19 @@ def _how_to_save(plan: PendingPlan, preview_id: str) -> str:
     )
 
 
-def plan_summary(plan: PendingPlan, titles: dict[str, str], preview_id: str) -> str:
+def plan_summary(
+    plan: PendingPlan, titles: dict[str, str], preview_id: str, units: tuple[str, str]
+) -> str:
     """What the model is told when the card is shown, since it can't see it."""
     return "\n".join(
         [
-            f"The user now sees the plan {plan.title!r} as a card with a Save to Hevy "
-            "button, showing every exercise, set and rest time. Don't repeat the plan in "
-            "your reply; say it's ready to check and how to save or change it. "
-            f"{_how_to_save(plan, preview_id)}",
+            f"The user should now see the plan {plan.title!r} as a card with a Save to "
+            "Hevy button, showing every exercise, set and rest time. Don't repeat the plan "
+            "in your reply; say it's ready to check and how to save or change it. If the "
+            "user says the card didn't appear, show them the plan below (already in their "
+            f"units) instead. {_how_to_save(plan, preview_id)}",
             "",
-            *_outline(plan, titles, units=None),
+            *_outline(plan, titles, units),
         ]
     )
 
@@ -204,7 +219,7 @@ def text_only_summary(
             "This client can't show the preview card, so show the user the plan below "
             f"(already in their units). {_how_to_save(plan, preview_id)}",
             "",
-            *_outline(plan, titles, units=units),
+            *_outline(plan, titles, units),
         ]
     )
 
@@ -233,17 +248,19 @@ def _routine_card(
             with TableBody():
                 for exercise in routine["exercises"]:
                     with TableRow():
-                        with TableCell(), Row(gap=2, align="center"):
-                            Text(titles[exercise["exercise_template_id"]], bold=True)
-                            if exercise.get("superset_id") is not None:
-                                label = supersets[exercise["superset_id"]]
-                                Badge(f"Superset {label}", variant="outline")
+                        # The notes go under the name: a row of their own would
+                        # squeeze them into the first of three columns.
+                        with TableCell(), Column(gap=1):
+                            with Row(gap=2, align="center"):
+                                Text(titles[exercise["exercise_template_id"]], bold=True)
+                                if exercise.get("superset_id") is not None:
+                                    label = supersets[exercise["superset_id"]]
+                                    Badge(f"Superset {label}", variant="outline")
+                            if exercise.get("notes"):
+                                Muted(exercise["notes"])
                         TableCell(describe_sets(exercise["sets"], weight_unit, distance_unit))
                         rest = exercise.get("rest_seconds")
                         TableCell(_duration(rest) if rest else "—")
-                    if exercise.get("notes"):
-                        with TableRow():
-                            TableCell(exercise["notes"], css_class="text-muted-foreground")
 
 
 def plan_view(
