@@ -159,6 +159,24 @@ async def test_a_create_journals_what_was_sent_and_the_new_id(
     assert (result["outcome"], result["id"]) == ("ok", record_id)
 
 
+async def test_create_plan_journals_the_folder_and_each_routine(journaling, fake, journal_file):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post("/v1/routines", status=201, json=load("hevy/routine.json"))
+
+    await journaling.call_tool(
+        "create_plan", {"title": "Push Pull", "routines": [{"title": "Push", "exercises": [BENCH]}]}
+    )
+
+    folder_try, folder_done, routine_try, routine_done = entries(journal_file)
+    assert (folder_try["tool"], folder_try["kind"]) == ("create_plan", "routine_folder")
+    assert (folder_done["outcome"], folder_done["id"]) == ("ok", 42)
+    assert (routine_try["tool"], routine_try["kind"]) == ("create_plan", "routine")
+    assert routine_try["request"]["folder_id"] == 42
+    assert (routine_done["outcome"], routine_done["id"]) == ("ok", ROUTINE_ID)
+
+
 async def test_update_body_measurement_journals_the_day_as_it_was(journaling, fake, journal_file):
     fake.get("/v1/body_measurements/2024-08-14", json=load("hevy/body_measurement.json"))
     fake.put("/v1/body_measurements/2024-08-14", httpx.Response(200))
