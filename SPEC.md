@@ -75,7 +75,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 
 **Stack**
 - Python 3.15, with dependencies managed by `uv` and a lockfile committed.
-- FastMCP 4.x (the latest release at the time of writing is 4.1.4), pinned `>=4.1,<5`. Server-initiated sampling and roots were removed in 4.0 and are not needed here.
+- FastMCP 4.x, pinned `fastmcp[apps]>=4.2.5,<5`. Server-initiated sampling and roots were removed in 4.0 and are not needed here.
 - `httpx` async client for Hevy calls, and Pydantic models for Hevy response shapes.
 
 **Modules**
