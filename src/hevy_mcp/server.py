@@ -460,16 +460,29 @@ def _dump_routine(exercises: list[RoutineExerciseInput]) -> list[dict[str, Any]]
 
 
 def _unfinished_plan(
-    folder: RoutineFolder, created: list[Routine], failed: str, error: HevyError
+    folder: RoutineFolder, created: list[Routine], failed: str, error: Exception
 ) -> str:
     """Explain a create_plan that stopped partway, so the client can finish it."""
     done = ", ".join(f"{r.title!r} (id {r.id})" for r in created) or "none"
+    if isinstance(error, _REFUSALS) and not error.maybe_applied:
+        stopped = f"The plan stopped at routine {failed!r}: {error}"
+        check = ""
+    else:
+        # No clear answer, so Hevy may have saved the routine.
+        reason = str(error) if isinstance(error, HevyError) else type(error).__name__
+        stopped = (
+            f"The plan stopped at routine {failed!r}, which may or may not have been "
+            f"created ({reason})."
+        )
+        check = (
+            f" Check with list_routines whether {failed!r} is in folder {folder.id} "
+            "before adding it, or it may be created twice."
+        )
     return (
-        f"The plan stopped at routine {failed!r}: {error} Already created: routine folder "
-        f"{folder.title!r} (folder_id {folder.id}) and routines: {done}. The routines "
-        f"after {failed!r} were not tried. Hevy's API can't delete, so add the missing "
-        f"routines with create_routine and folder_id {folder.id} instead of creating "
-        "the plan again."
+        f"{stopped} Already created: routine folder {folder.title!r} (folder_id "
+        f"{folder.id}) and routines: {done}. The routines after {failed!r} were not "
+        f"tried.{check} Hevy's API can't delete, so add the missing routines with "
+        f"create_routine and folder_id {folder.id} instead of creating the plan again."
     )
 
 
@@ -727,6 +740,14 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             lambda: state.hevy.create_routine_folder(title),
             created_id=lambda created: created.id,
         )
+        if folder.id is None:
+            # Without an id the routines would land in "My Routines" instead.
+            raise ToolError(
+                f"Hevy created routine folder {title!r} but didn't return its id, so no "
+                "routines were created. Find the folder with list_routine_folders and add "
+                "the routines with create_routine and its folder_id, instead of creating "
+                "the plan again."
+            )
         created: list[Routine] = []
         for body in bodies:
             routine = {"title": body["title"], "folder_id": folder.id} | body
@@ -740,7 +761,9 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
                         created_id=lambda new: new.id,
                     )
                 )
-            except HevyError as exc:
+            except Exception as exc:
+                # Anything that goes wrong here leaves a folder behind, so the
+                # client must hear what exists rather than a generic error.
                 raise ToolError(_unfinished_plan(folder, created, body["title"], exc)) from None
         return Plan(folder=folder, routines=created)
 

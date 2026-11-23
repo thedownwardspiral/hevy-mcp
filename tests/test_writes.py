@@ -411,6 +411,57 @@ async def test_create_plan_stops_at_a_refused_routine_and_says_what_exists(write
     assert len(fake.hevy_requests("/v1/routines")) == 2
 
 
+def three_day_plan() -> dict:
+    return {
+        "title": "PPL",
+        "routines": [plan_routine("Push"), plan_routine("Pull"), plan_routine("Legs")],
+    }
+
+
+async def test_create_plan_says_a_routine_without_an_answer_may_exist(writer, fake):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post("/v1/routines", created_routine("Push", "r1"), httpx.Response(500))
+
+    with pytest.raises(ToolError) as raised:
+        await writer.call_tool("create_plan", three_day_plan())
+
+    message = str(raised.value)
+    assert "'Pull', which may or may not have been created" in message
+    assert "Check with list_routines whether 'Pull' is in folder 42" in message
+    assert "'Push' (id r1)" in message
+    assert len(fake.hevy_requests("/v1/routines")) == 2
+
+
+async def test_create_plan_says_what_exists_after_an_unexpected_error(writer, fake):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post(
+        "/v1/routines",
+        created_routine("Push", "r1"),
+        httpx.Response(201, json={"routine": {"exercises": "not a list"}}),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        await writer.call_tool("create_plan", three_day_plan())
+
+    message = str(raised.value)
+    assert "may or may not have been created (ValidationError)" in message
+    assert "'Push' (id r1)" in message
+    assert "folder_id 42" in message
+
+
+async def test_create_plan_stops_when_the_folder_has_no_id(writer, fake):
+    fake.post("/v1/routine_folders", status=201, json={"routine_folder": {"title": "PPL"}})
+
+    with pytest.raises(ToolError, match="didn't return its id, so no routines were created"):
+        await writer.call_tool("create_plan", three_day_plan())
+
+    assert fake.hevy_requests("/v1/routines") == []
+
+
 async def test_create_plan_checks_every_routine_before_writing(writer, fake):
     backwards = {
         "exercise_template_id": "05293BCA",
