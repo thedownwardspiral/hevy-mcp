@@ -187,6 +187,37 @@ async def test_a_refused_write_is_journaled_as_rejected(journaling, fake, journa
     assert "already exists" in result["error"]
 
 
+async def test_a_refusal_after_an_unanswered_try_is_journaled_as_uncertain(
+    journaling, fake, journal_file
+):
+    fake.get(f"/v1/workouts/{WORKOUT_ID}", json=load("hevy/workout.json"))
+    # The first PUT may have been saved before the 502; only the retry is refused.
+    fake.put(f"/v1/workouts/{WORKOUT_ID}", httpx.Response(502), httpx.Response(401))
+
+    with pytest.raises(ToolError, match="rejected the API key"):
+        await journaling.call_tool(
+            "update_workout", {"workout_id": WORKOUT_ID, "title": "Renamed", "is_private": False}
+        )
+
+    [_, result] = entries(journal_file)
+    assert result["outcome"] == "uncertain"
+    assert "rejected the API key" in result["error"]
+
+
+async def test_a_refusal_after_a_rate_limit_is_still_rejected(journaling, fake, journal_file):
+    fake.get(f"/v1/workouts/{WORKOUT_ID}", json=load("hevy/workout.json"))
+    # A 429 means Hevy didn't act on the first PUT.
+    fake.put(f"/v1/workouts/{WORKOUT_ID}", httpx.Response(429), httpx.Response(400, json={}))
+
+    with pytest.raises(ToolError):
+        await journaling.call_tool(
+            "update_workout", {"workout_id": WORKOUT_ID, "title": "Renamed", "is_private": False}
+        )
+
+    [_, result] = entries(journal_file)
+    assert result["outcome"] == "rejected"
+
+
 async def test_a_create_hevy_may_have_saved_is_journaled_as_uncertain(
     journaling, fake, journal_file
 ):
@@ -295,6 +326,36 @@ async def test_without_a_journal_file_entries_go_to_the_log(writer, fake, caplog
     assert attempt["before"] == load("hevy/workout.json")
     assert attempt["request"]["title"] == "Renamed"
     assert (result["op"], result["outcome"]) == (attempt["op"], "ok")
+
+
+async def test_a_quiet_log_level_does_not_drop_journal_entries(writer, fake, caplog):
+    caplog.set_level(logging.ERROR)  # as LOG_LEVEL=ERROR sets the root logger
+    caplog.handler.setLevel(logging.NOTSET)
+    fake.post("/v1/body_measurements", httpx.Response(201))
+
+    await writer.call_tool(
+        "create_body_measurement", {"date": "2024-08-14", "measurements": {"weight_kg": 80}}
+    )
+
+    [attempt, result] = [json.loads(message) for message in journal_records(caplog)]
+    assert (attempt["event"], result["outcome"]) == ("attempt", "ok")
+
+
+async def test_an_entry_after_one_cut_short_is_still_a_line_of_its_own(
+    journaling, fake, journal_file
+):
+    # What a full disk leaves behind: part of an entry, with no newline.
+    journal_file.write_text('{"ts":"2024-08-14T07:00:00+00:00","op":"0badc0de","eve')
+    fake.post("/v1/body_measurements", httpx.Response(201))
+
+    await journaling.call_tool(
+        "create_body_measurement", {"date": "2024-08-14", "measurements": {"weight_kg": 80}}
+    )
+
+    [fragment, attempt, result] = journal_file.read_text().splitlines()
+    assert fragment.endswith('"eve')
+    assert json.loads(attempt)["event"] == "attempt"
+    assert json.loads(result)["outcome"] == "ok"
 
 
 async def test_a_write_is_refused_when_its_journal_entry_cannot_be_saved(

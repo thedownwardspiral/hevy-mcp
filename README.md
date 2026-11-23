@@ -86,6 +86,8 @@ Hevy's API can't undo a change, so the server keeps a journal of every write. Ea
 - `before` is the whole record as Hevy had it, on updates only. `request` is what was sent. A create's new id is in its `result` line.
 - `outcome` is `ok`, `rejected` (Hevy refused, so nothing changed) or `uncertain` (Hevy may have saved it: check in the app).
 - The first line is saved before anything is sent. If it can't be saved, the write is refused. The server also checks the file at startup.
+- A line that doesn't parse is an entry that was cut short, by a full disk for example. Later entries are unaffected.
+- Journal entries are logged whatever `LOG_LEVEL` is.
 - With the Compose file, the journal is `/var/lib/hevy-mcp/journal.jsonl` in the `journal` volume, so it survives upgrades. The log gets a one-line pointer per entry, without the record. With `HEVY_JOURNAL_PATH` empty, the full entries go to the log instead and are lost when the container is recreated.
 - The journal holds your workout and body-measurement data, readable only by the container's user. It never holds the API key. Nothing trims it.
 

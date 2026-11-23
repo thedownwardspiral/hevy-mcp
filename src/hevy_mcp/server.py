@@ -438,7 +438,7 @@ def _dump_routine(exercises: list[RoutineExerciseInput]) -> list[dict[str, Any]]
     return [exercise | {"sets": routine_sets(exercise["sets"])} for exercise in _dump(exercises)]
 
 
-# Hevy answered with a refusal, so the write changed nothing.
+# Hevy answered with a refusal, so that request changed nothing.
 _REFUSALS = (HevyAuthError, HevyConflict, HevyLimitReached, HevyNotFound, HevyRequestError)
 
 
@@ -469,7 +469,9 @@ async def _journaled[R](
     try:
         result = await write()
     except _REFUSALS as exc:
-        journal.end(op, "rejected", error=str(exc))
+        # A refusal of a retry says nothing about the try before it, which
+        # Hevy may have saved without answering.
+        journal.end(op, "uncertain" if exc.maybe_applied else "rejected", error=str(exc))
         raise
     except HevyError as exc:
         journal.end(op, "uncertain", error=str(exc))

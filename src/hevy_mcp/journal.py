@@ -22,6 +22,9 @@ from typing import Any
 from hevy_mcp.hevy import HevyError
 
 logger = logging.getLogger(__name__)
+# The journal is a record, not diagnostics: LOG_LEVEL=WARNING must not drop it
+# when the log is the only place it goes.
+logger.setLevel(logging.INFO)
 
 
 class JournalError(HevyError):
@@ -84,8 +87,13 @@ class Journal:
         assert self._path is not None
         try:
             # Owner-only: the journal holds workout and body-measurement data.
-            descriptor = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            descriptor = os.open(self._path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
             with os.fdopen(descriptor, "a", encoding="utf-8") as file:
+                size = os.fstat(descriptor).st_size
+                if size and os.pread(descriptor, 1, size - 1) != b"\n":
+                    # An earlier append was cut short, by a full disk, say. End
+                    # that fragment's line so this entry is valid JSON on its own.
+                    text = "\n" + text
                 file.write(text)
                 file.flush()
                 os.fsync(file.fileno())

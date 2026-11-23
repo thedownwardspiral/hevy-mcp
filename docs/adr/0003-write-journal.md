@@ -22,7 +22,9 @@ Entries go to the file at `HEVY_JOURNAL_PATH`, or to the log when that's unset. 
 - This is the server's only persistent state. It's optional, and read-only deployments never touch it.
 - The journal holds workout and body-measurement data. The file is created readable only by its owner, and with a file configured the log gets a one-line pointer per entry (op id, tool, record id, outcome), never the record. With no file, the full entries are in the log.
 - The journal never holds the API key or an Access token: entries are built from the tool's arguments and Hevy's response bodies.
-- A write Hevy refused (a 4xx) is journaled as `rejected`: nothing changed. Anything else that isn't a clean success is `uncertain`, including a response the server couldn't read, so the journal never claims a change didn't happen when it might have.
+- A write Hevy refused (a 4xx) is journaled as `rejected`: nothing changed. Anything else that isn't a clean success is `uncertain`, including a response the server couldn't read, so the journal never claims a change didn't happen when it might have. That covers a refusal of a retried update whose earlier try timed out or got a 5xx: Hevy may have saved that try.
+- An append that is cut short, by a full disk for example, leaves part of an entry in the file. The next entry starts on a new line, so the fragment stays a broken line of its own and every later entry is still valid JSON.
+- Journal entries are logged whatever `LOG_LEVEL` is, so a quiet log level can't drop them when the log is the only place they go.
 - Calls that never reach a write (invalid input, an update whose record isn't found) aren't journaled.
 - The file is never rotated or trimmed. At a few kilobytes per write, a single user's journal grows slowly.
 - Text from a tool call can't forge an entry: each entry is one JSON line with control characters escaped.
