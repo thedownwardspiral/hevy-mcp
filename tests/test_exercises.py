@@ -6,9 +6,13 @@ from fastmcp.exceptions import ToolError
 from .conftest import load
 
 
-def matched(result, index: int = 0) -> list[dict]:
-    """The templates one search in a search_exercise_templates result matched."""
-    return result.structured_content["searches"][index]["exercise_templates"]
+def matched(result, index: int | None = None) -> list[dict]:
+    """The templates a search_exercise_templates result matched: for one name, or
+    for the name at ``index`` of a list."""
+    content = result.structured_content
+    if index is None:
+        return content["exercise_templates"]
+    return content["searches"][index]["exercise_templates"]
 
 
 async def test_list_exercise_templates_caps_page_size_at_100(client, fake):
@@ -55,7 +59,8 @@ async def test_search_matches_titles_across_pages_ignoring_case(client, fake):
 
     result = await client.call_tool("search_exercise_templates", {"query": "BENCH press"})
 
-    assert result.structured_content["searches"][0]["query"] == "BENCH press"
+    assert result.structured_content["query"] == "BENCH press"
+    assert result.structured_content["searches"] is None
     assert [t["id"] for t in matched(result)] == [
         "05293BCA",
         "3601968B",
@@ -114,6 +119,26 @@ async def test_search_for_several_names_answers_each_in_order(client, fake):
     assert matched(result, 1) == []
     assert [t["title"] for t in matched(result, 2)] == ["Squat (Barbell)"]
     assert len(fake.hevy_requests()) == 1
+
+
+async def test_search_for_several_names_caps_the_matches_per_name(make_client, fake):
+    full = [template(n, f"Bench {n}") for n in range(100)]
+    fake.get(
+        "/v1/exercise_templates",
+        json={"page": 1, "page_count": 1, "exercise_templates": full},
+    )
+
+    async with make_client() as client:
+        result = await client.call_tool(
+            "search_exercise_templates", {"query": ["bench", "bench 7"]}
+        )
+
+    broad, narrow = result.structured_content["searches"]
+    assert (broad["match_count"], len(broad["exercise_templates"])) == (100, 20)
+    assert [t["title"] for t in broad["exercise_templates"]][:2] == ["Bench 0", "Bench 1"]
+    # "Bench 7" and "Bench 70" to "Bench 79".
+    assert (narrow["match_count"], len(narrow["exercise_templates"])) == (11, 11)
+    assert result.structured_content["exercise_templates"] is None
 
 
 @pytest.mark.parametrize("query", [[], ["bench", " "], ["x"] * 51])

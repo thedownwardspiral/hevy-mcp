@@ -48,7 +48,7 @@ There are four layers, and each one fails closed:
 | `get_training_summary(start_date, end_date)` | Workout count, duration, volume, sets and reps, per-exercise and per-muscle-group totals (warm-ups excluded) |
 | `list_workout_events(since, page, page_size)` | Workout updates and deletions since a date |
 | `get_exercise_history(exercise_template_id, start_date?, end_date?)` | Every logged set of one exercise |
-| `search_exercise_templates(query)` | Templates whose title contains the query (case-insensitive); pass a list of names to look up several at once |
+| `search_exercise_templates(query)` | Templates whose title contains the query (case-insensitive); pass a list of names to look up several at once (at most 20 matches each) |
 | `list_exercise_templates(page, page_size)` / `get_exercise_template(id)` | Templates with muscle groups and equipment |
 | `list_body_measurements(page, page_size)` / `get_body_measurement(date)` | Body measurements |
 | `get_body_measurements_in_range(start_date, end_date)` | Every body measurement in a date range |

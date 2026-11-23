@@ -404,9 +404,10 @@ async def test_create_plan_stops_at_a_refused_routine_and_says_what_exists(write
         )
 
     message = str(raised.value)
-    assert "stopped at routine 'Pull'" in message
+    assert "stopped at routine 2 of 3, 'Pull':" in message
     assert "routine limit is reached" in message
-    assert "'Push' (id r1)" in message
+    assert "1 'Push' (id r1)" in message
+    assert "Routine 3 was not tried." in message
     assert "folder_id 42" in message
     assert len(fake.hevy_requests("/v1/routines")) == 2
 
@@ -429,7 +430,7 @@ async def test_create_plan_says_a_routine_without_an_answer_may_exist(writer, fa
 
     message = str(raised.value)
     assert "'Pull', which may or may not have been created" in message
-    assert "Check with list_routines whether 'Pull' is in folder 42" in message
+    assert "Check with list_routines whether routine 2 ('Pull') is in folder 42" in message
     assert "'Push' (id r1)" in message
     assert len(fake.hevy_requests("/v1/routines")) == 2
 
@@ -462,6 +463,29 @@ async def test_create_plan_stops_when_the_folder_has_no_id(writer, fake):
     assert fake.hevy_requests("/v1/routines") == []
 
 
+async def test_create_plan_names_routines_by_position_when_titles_repeat(writer, fake):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post(
+        "/v1/routines",
+        created_routine("Upper", "r1"),
+        created_routine("Lower", "r2"),
+        httpx.Response(403, json={"error": "routine-limit-exceeded"}),
+    )
+    titles = ["Upper", "Lower", "Upper", "Lower"]
+
+    with pytest.raises(ToolError) as raised:
+        await writer.call_tool(
+            "create_plan", {"title": "UL", "routines": [plan_routine(t) for t in titles]}
+        )
+
+    message = str(raised.value)
+    assert "stopped at routine 3 of 4, 'Upper':" in message
+    assert "1 'Upper' (id r1), 2 'Lower' (id r2)" in message
+    assert "Routine 4 was not tried." in message
+
+
 async def test_create_plan_checks_every_routine_before_writing(writer, fake):
     backwards = {
         "exercise_template_id": "05293BCA",
@@ -476,6 +500,17 @@ async def test_create_plan_checks_every_routine_before_writing(writer, fake):
                 "routines": [plan_routine("Push"), {"title": "Pull", "exercises": [backwards]}],
             },
         )
+
+    assert fake.requests == []
+
+
+@pytest.mark.parametrize("tool", ["create_routine", "create_plan"])
+async def test_a_routine_needs_an_exercise(writer, fake, tool):
+    routine = {"title": "Push", "exercises": []}
+    arguments = routine if tool == "create_routine" else {"title": "P", "routines": [routine]}
+
+    with pytest.raises(ToolError):
+        await writer.call_tool(tool, arguments)
 
     assert fake.requests == []
 
@@ -547,8 +582,7 @@ async def test_create_exercise_template_refreshes_the_search_cache(writer, fake)
     )
     result = await writer.call_tool("search_exercise_templates", {"query": "landmine"})
 
-    [search] = result.structured_content["searches"]
-    assert [t["id"] for t in search["exercise_templates"]] == ["123"]
+    assert [t["id"] for t in result.structured_content["exercise_templates"]] == ["123"]
 
 
 async def test_create_exercise_template_over_the_limit(writer, fake):

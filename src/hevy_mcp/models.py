@@ -144,15 +144,27 @@ class TrainingSummary(BaseModel):
 
 
 class ExerciseTemplateMatches(BaseModel):
-    """The templates matching one of the searched names."""
+    """The templates matching one of several searched names."""
 
     query: str
-    exercise_templates: list[ExerciseTemplate]
+    match_count: int = Field(
+        description="How many templates match, counting any left out of exercise_templates."
+    )
+    exercise_templates: list[ExerciseTemplate] = Field(
+        description="The first matches. If match_count is larger, search for this name "
+        "alone, or a longer name, to see the rest."
+    )
 
 
 class ExerciseTemplateSearch(BaseModel):
-    searches: list[ExerciseTemplateMatches] = Field(
-        description="One entry per searched name, in the order given."
+    """One name's matches in ``exercise_templates``, or a list's in ``searches``."""
+
+    query: str | None = Field(default=None, description="The name, when one was given.")
+    exercise_templates: list[ExerciseTemplate] | None = Field(
+        default=None, description="Every template matching the name, when one was given."
+    )
+    searches: list[ExerciseTemplateMatches] | None = Field(
+        default=None, description="When a list was given: one entry per name, in order."
     )
     truncated: bool = Field(
         description="True if the page cap stopped the template listing early, so some "
@@ -348,13 +360,17 @@ class RoutineExerciseInput(HevyInput):
     sets: list[RoutineSetInput] = Field(min_length=1)
 
 
+RoutineExercises = Annotated[
+    list[RoutineExerciseInput],
+    Field(min_length=1, description="The exercises in order, each with its planned sets in order."),
+]
+
+
 class PlanRoutineInput(HevyInput):
     """One routine of a plan."""
 
     title: str
-    exercises: list[RoutineExerciseInput] = Field(
-        min_length=1, description="The exercises in order, each with its planned sets in order."
-    )
+    exercises: RoutineExercises
     notes: str | None = None
 
 

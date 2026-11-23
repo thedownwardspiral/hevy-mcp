@@ -120,7 +120,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 | `get_training_summary(start_date, end_date)` | Workouts in range plus exercise templates, then Analysis |
 | `list_workout_events(since, page, page_size)` | `GET /v1/workouts/events` |
 | `get_exercise_history(exercise_template_id, start_date?, end_date?)` | `GET /v1/exercise_history/{id}` |
-| `search_exercise_templates(query)` | Lists all templates (100 per page), then a case-insensitive substring match on the title. `query` is one name or a list of up to 50, answered in order |
+| `search_exercise_templates(query)` | Lists all templates (100 per page), then a case-insensitive substring match on the title. `query` is one name, answered as before, or a list of up to 50, answered in order under `searches` with at most 20 matches per name and a `match_count` |
 | `list_exercise_templates(page, page_size)` / `get_exercise_template(id)` | `GET /v1/exercise_templates[/{id}]` |
 | `list_body_measurements(page, page_size)` / `get_body_measurement(date)` | `GET /v1/body_measurements[/{date}]` |
 | `get_body_measurements_in_range(start_date, end_date)` | Pages body measurements lazily |

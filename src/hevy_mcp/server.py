@@ -60,6 +60,7 @@ from hevy_mcp.models import (
     PlanRoutineInput,
     Routine,
     RoutineExerciseInput,
+    RoutineExercises,
     RoutineFolder,
     RoutineFolderPage,
     RoutinePage,
@@ -85,9 +86,10 @@ CREATES = ToolAnnotations(
 UPDATES = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
 )
-# Enough for every exercise of a long plan; search is local, so this only
-# bounds the size of one answer.
+# Enough for every exercise of a long plan. Search is local, so these two only
+# bound the size of one answer: at most 50 x 20 templates.
 MAX_SEARCH_QUERIES = 50
+MAX_MATCHES_PER_NAME = 20
 # update_routine's folder_id for Hevy's default folder, which has no id.
 MY_ROUTINES = "my_routines"
 # How the tool-call log names the caller when Access isn't configured.
@@ -124,10 +126,6 @@ Moment = Annotated[
 WorkoutExercises = Annotated[
     list[WorkoutExerciseInput],
     Field(description="The exercises in order, each with its sets in order."),
-]
-RoutineExercises = Annotated[
-    list[RoutineExerciseInput],
-    Field(description="The exercises in order, each with its planned sets in order."),
 ]
 Day = Annotated[str, Field(description="The day, as YYYY-MM-DD.")]
 
@@ -347,8 +345,9 @@ def create_server(
         ],
     ) -> ExerciseTemplateSearch:
         """Find exercise templates whose title contains the query, ignoring case.
-        Pass a list to look up every exercise of a routine or workout in one call.
-        Use it to get the exercise_template_id that other tools need."""
+        Pass a list to look up every exercise of a routine or workout in one call;
+        the answer is then under searches, with at most 20 matches per name. Use it
+        to get the exercise_template_id that other tools need."""
         queries = [query] if isinstance(query, str) else query
         if not queries:
             raise ToolError("Give at least one name to search for.")
@@ -358,13 +357,20 @@ def create_server(
         if not all(needles):
             raise ToolError("Search names must not be blank.")
         templates, truncated = await state.hevy.all_exercise_templates()
+        matches = [[t for t in templates if n in (t.title or "").casefold()] for n in needles]
+        if isinstance(query, str):
+            # One name keeps the answer's original shape, so older callers still work.
+            return ExerciseTemplateSearch(
+                query=query, exercise_templates=matches[0], truncated=truncated
+            )
         return ExerciseTemplateSearch(
             searches=[
                 ExerciseTemplateMatches(
                     query=q,
-                    exercise_templates=[t for t in templates if n in (t.title or "").casefold()],
+                    match_count=len(found),
+                    exercise_templates=found[:MAX_MATCHES_PER_NAME],
                 )
-                for q, n in zip(queries, needles, strict=True)
+                for q, found in zip(queries, matches, strict=True)
             ],
             truncated=truncated,
         )
@@ -460,29 +466,37 @@ def _dump_routine(exercises: list[RoutineExerciseInput]) -> list[dict[str, Any]]
 
 
 def _unfinished_plan(
-    folder: RoutineFolder, created: list[Routine], failed: str, error: Exception
+    folder: RoutineFolder, created: list[Routine], failed: str, total: int, error: Exception
 ) -> str:
-    """Explain a create_plan that stopped partway, so the client can finish it."""
-    done = ", ".join(f"{r.title!r} (id {r.id})" for r in created) or "none"
+    """Explain a create_plan that stopped partway, so the client can finish it.
+
+    Routines are named by position as well as title, since titles may repeat.
+    """
+    position = len(created) + 1
+    at = f"routine {position} of {total}, {failed!r}"
+    done = ", ".join(f"{n} {r.title!r} (id {r.id})" for n, r in enumerate(created, 1)) or "none"
     if isinstance(error, _REFUSALS) and not error.maybe_applied:
-        stopped = f"The plan stopped at routine {failed!r}: {error}"
+        stopped = f"The plan stopped at {at}: {error}"
         check = ""
     else:
         # No clear answer, so Hevy may have saved the routine.
         reason = str(error) if isinstance(error, HevyError) else type(error).__name__
-        stopped = (
-            f"The plan stopped at routine {failed!r}, which may or may not have been "
-            f"created ({reason})."
-        )
+        stopped = f"The plan stopped at {at}, which may or may not have been created ({reason})."
         check = (
-            f" Check with list_routines whether {failed!r} is in folder {folder.id} "
-            "before adding it, or it may be created twice."
+            f" Check with list_routines whether routine {position} ({failed!r}) is in folder "
+            f"{folder.id} before adding it, or it may be created twice."
         )
+    if position == total:
+        rest = ""
+    elif position + 1 == total:
+        rest = f" Routine {total} was not tried."
+    else:
+        rest = f" Routines {position + 1} to {total} were not tried."
     return (
         f"{stopped} Already created: routine folder {folder.title!r} (folder_id "
-        f"{folder.id}) and routines: {done}. The routines after {failed!r} were not "
-        f"tried.{check} Hevy's API can't delete, so add the missing routines with "
-        f"create_routine and folder_id {folder.id} instead of creating the plan again."
+        f"{folder.id}) and routines: {done}.{rest}{check} Hevy's API can't delete, so add "
+        f"the missing routines with create_routine and folder_id {folder.id} instead of "
+        "creating the plan again."
     )
 
 
@@ -750,13 +764,15 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             )
         created: list[Routine] = []
         for body in bodies:
-            routine = {"title": body["title"], "folder_id": folder.id} | body
+            routine = body | {"folder_id": folder.id}
             try:
                 created.append(
                     await journaled(
                         "create_plan",
                         "routine",
                         routine,
+                        # partial binds this routine now; a lambda would close over
+                        # the loop variable (ruff B023).
                         partial(state.hevy.create_routine, routine),
                         created_id=lambda new: new.id,
                     )
@@ -764,7 +780,9 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             except Exception as exc:
                 # Anything that goes wrong here leaves a folder behind, so the
                 # client must hear what exists rather than a generic error.
-                raise ToolError(_unfinished_plan(folder, created, body["title"], exc)) from None
+                raise ToolError(
+                    _unfinished_plan(folder, created, body["title"], len(bodies), exc)
+                ) from None
         return Plan(folder=folder, routines=created)
 
     @mcp.tool(annotations=CREATES)
