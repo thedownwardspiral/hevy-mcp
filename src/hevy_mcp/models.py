@@ -8,12 +8,51 @@ The ``*Input`` models at the end are the opposite: tool inputs for writes,
 which refuse unknown fields so that a misspelt one isn't silently dropped.
 """
 
-from typing import Annotated, Literal, Self
+import math
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 
-class HevyModel(BaseModel):
+def non_finite_to_none(value: Any) -> Any:
+    """The value with every NaN or infinity in it replaced by None."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: non_finite_to_none(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [non_finite_to_none(item) for item in value]
+    return value
+
+
+class ResultModel(BaseModel):
+    """A tool result, whose JSON shows a number that isn't finite as null.
+
+    Hevy's JSON can hold NaN, Infinity or an out-of-range literal like 1e999,
+    and sums over such a value aren't finite either. JSON can't carry them and
+    FastMCP fails the whole tool call on one, so they become null only here, on
+    the way out. The models keep the values as read: a sum over one stays
+    unknown instead of coming out too low, and a write that would send one
+    back is refused (see ``HevyNonFinite``) instead of saving null.
+    """
+
+    # No return annotation: Pydantic would take it as the output schema, and
+    # every tool's schema would become "any".
+    @model_serializer(mode="wrap")
+    def _non_finite_as_null(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo):
+        data = handler(self)
+        return non_finite_to_none(data) if info.mode_is_json() else data
+
+
+class HevyModel(ResultModel):
     model_config = ConfigDict(extra="allow")
 
 
@@ -103,7 +142,7 @@ class ExerciseTemplatePage(HevyModel):
     exercise_templates: list[ExerciseTemplate] = []
 
 
-class WorkoutRange(BaseModel):
+class WorkoutRange(ResultModel):
     start_date: str
     end_date: str
     workouts: list[Workout]
@@ -112,28 +151,35 @@ class WorkoutRange(BaseModel):
     )
 
 
-class ExerciseSummary(BaseModel):
+# A sum over a value Hevy sent as NaN or Infinity is unknown, as is one that
+# overflows, and tool results show it as null.
+_UNKNOWN_SUM = "Null if a value in it isn't a finite number, or it overflowed."
+
+
+class ExerciseSummary(ResultModel):
     exercise_template_id: str | None
     title: str | None
     sets: int
-    reps: Number
-    volume_kg: Number
+    reps: Number | None = Field(description=_UNKNOWN_SUM)
+    volume_kg: Number | None = Field(description=_UNKNOWN_SUM)
     top_weight_kg: Number | None
 
 
-class MuscleGroupSummary(BaseModel):
+class MuscleGroupSummary(ResultModel):
     muscle_group: str
     sets: int
 
 
-class TrainingSummary(BaseModel):
+class TrainingSummary(ResultModel):
     start_date: str
     end_date: str
     workout_count: int
     total_duration_seconds: Number
-    total_volume_kg: Number = Field(description="Sum of weight_kg x reps over working sets.")
+    total_volume_kg: Number | None = Field(
+        description=f"Sum of weight_kg x reps over working sets. {_UNKNOWN_SUM}"
+    )
     total_sets: int = Field(description="Working sets; warm-ups are excluded throughout.")
-    total_reps: Number
+    total_reps: Number | None = Field(description=_UNKNOWN_SUM)
     exercises: list[ExerciseSummary]
     muscle_groups: list[MuscleGroupSummary] = Field(
         description="Working sets per primary muscle group of each exercise template."
@@ -143,7 +189,7 @@ class TrainingSummary(BaseModel):
     )
 
 
-class ExerciseTemplateMatches(BaseModel):
+class ExerciseTemplateMatches(ResultModel):
     """The templates matching one of several searched names."""
 
     query: str
@@ -156,7 +202,7 @@ class ExerciseTemplateMatches(BaseModel):
     )
 
 
-class ExerciseTemplateSearch(BaseModel):
+class ExerciseTemplateSearch(ResultModel):
     """One name's matches in ``exercise_templates``, or a list's in ``searches``."""
 
     query: str | None = Field(default=None, description="The name, when one was given.")
@@ -222,7 +268,7 @@ class BodyMeasurementPage(HevyModel):
     body_measurements: list[BodyMeasurement] = []
 
 
-class BodyMeasurementRange(BaseModel):
+class BodyMeasurementRange(ResultModel):
     start_date: str
     end_date: str
     body_measurements: list[BodyMeasurement]
@@ -280,7 +326,7 @@ class RoutineFolder(HevyModel):
     created_at: str | None = None
 
 
-class Plan(BaseModel):
+class Plan(ResultModel):
     """A routine folder and the routines created in it."""
 
     folder: RoutineFolder

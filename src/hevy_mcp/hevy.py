@@ -32,6 +32,7 @@ from hevy_mcp.models import (
     WorkoutCount,
     WorkoutEventPage,
     WorkoutPage,
+    non_finite_to_none,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,17 @@ class HevyWriteUncertain(HevyError):
         super().__init__(
             f"Creating {what} may or may not have worked ({reason}). Check whether it "
             "exists in Hevy before trying again, or it may be created twice."
+        )
+
+
+class HevyNonFinite(HevyError):
+    """A write holding NaN or Infinity, refused before anything is sent."""
+
+    def __init__(self, what: str) -> None:
+        super().__init__(
+            f"Nothing was sent: {what} holds a number that isn't finite (NaN or "
+            "Infinity), which JSON can't carry. If Hevy sent that value, fix it in the "
+            "Hevy app first; sending it back as null would erase it."
         )
 
 
@@ -183,6 +195,9 @@ class HevyClient:
         that a retry can't create a duplicate. ``limit`` names the quota a 403
         means on endpoints where Hevy uses 403 for "limit reached".
         """
+        if json is not None and non_finite_to_none(json) != json:
+            # httpx would refuse it too, but as a bare ValueError.
+            raise HevyNonFinite(what)
         attempts = self._max_retries + 1
         safe_to_repeat = method != "POST"
         # Whether an earlier try of a write may have been saved by Hevy.
