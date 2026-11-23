@@ -1,6 +1,7 @@
 """Cloudflare Access: every request except /health needs a valid Access JWT."""
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -474,3 +475,17 @@ async def test_debug_logs_never_contain_tokens_header_values_or_the_api_key(
             assert segment not in logs
     assert malformed not in logs
     assert TEST_API_KEY not in logs
+
+
+async def test_a_write_is_journaled_under_the_callers_email(make_app, hevy, caplog):
+    caplog.set_level(logging.INFO)
+    hevy.post("/v1/body_measurements", httpx.Response(201))
+    app = make_app(HEVY_ENABLE_WRITES="true")
+
+    async with app.lifespan(app), mcp_client(app, token()) as client:
+        await client.call_tool(
+            "create_body_measurement", {"date": "2024-08-14", "measurements": {"weight_kg": 80}}
+        )
+
+    [attempt, _] = [r.getMessage() for r in caplog.records if r.name == "hevy_mcp.journal"]
+    assert json.loads(attempt)["caller"] == OWNER

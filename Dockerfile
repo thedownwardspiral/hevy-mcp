@@ -19,9 +19,12 @@ FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87
 LABEL org.opencontainers.image.title="hevy-mcp" \
       org.opencontainers.image.description="MCP server for Hevy workout and body-measurement data, read-only unless writes are enabled" \
       org.opencontainers.image.source="https://github.com/thedownwardspiral/hevy-mcp"
+# /var/lib/hevy-mcp is where a volume for the write journal mounts. A new named
+# volume takes this directory's owner and mode, so the server can write to it.
 RUN groupadd --system --gid 10001 hevy \
  && useradd --system --uid 10001 --gid hevy --no-create-home --home-dir /nonexistent \
-      --shell /usr/sbin/nologin hevy
+      --shell /usr/sbin/nologin hevy \
+ && install --directory --owner 10001 --group 10001 --mode 0700 /var/lib/hevy-mcp
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

@@ -21,6 +21,9 @@ services:
       VAULT_KV_PATH: ${VAULT_KV_PATH:-hevy-mcp}
       # Write tools that create and update Hevy data; off unless set to true.
       HEVY_ENABLE_WRITES: ${HEVY_ENABLE_WRITES:-false}
+      # The journal of writes, kept in the volume below so it outlives the
+      # container. Set it empty in .env to journal to the log instead.
+      HEVY_JOURNAL_PATH: ${HEVY_JOURNAL_PATH-/var/lib/hevy-mcp/journal.jsonl}
       TZ: ${TZ:-UTC}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Hostnames the server answers for; empty accepts any host.
@@ -35,6 +38,7 @@ services:
       - vault_secret_id
     volumes:
       - ${VAULT_CACERT_SOURCE:-./secrets/vault-ca.pem}:/etc/hevy-mcp/vault-ca.pem:ro
+      - journal:/var/lib/hevy-mcp
     networks:
       - traefik
     # If the container can't resolve vault.<home-domain>, point it at the home
@@ -68,6 +72,10 @@ secrets:
     file: ${VAULT_ROLE_ID_SOURCE:-./secrets/vault_role_id}
   vault_secret_id:
     file: ${VAULT_SECRET_ID_SOURCE:-./secrets/vault_secret_id}
+
+volumes:
+  # The write journal: what each write sent and what each update replaced.
+  journal:
 
 networks:
   traefik:

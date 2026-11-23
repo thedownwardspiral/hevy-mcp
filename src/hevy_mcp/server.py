@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from importlib.metadata import version
 from typing import Annotated, Any, Literal
 
@@ -13,7 +13,7 @@ from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -28,8 +28,19 @@ from hevy_mcp.dates import (
     to_hevy,
 )
 from hevy_mcp.edits import measurement_values, routine_body, routine_sets, workout_body
-from hevy_mcp.hevy import MAX_PAGE_SIZE, MAX_TEMPLATE_PAGE_SIZE, HevyClient, HevyError
+from hevy_mcp.hevy import (
+    MAX_PAGE_SIZE,
+    MAX_TEMPLATE_PAGE_SIZE,
+    HevyAuthError,
+    HevyClient,
+    HevyConflict,
+    HevyError,
+    HevyLimitReached,
+    HevyNotFound,
+    HevyRequestError,
+)
 from hevy_mcp.hosts import allowed_hosts_middleware
+from hevy_mcp.journal import Journal, JournalError
 from hevy_mcp.models import (
     BodyMeasurement,
     BodyMeasurementInput,
@@ -172,6 +183,7 @@ def _caller() -> str:
 
 class _State:
     hevy: HevyClient
+    journal: Journal
 
 
 def create_server(
@@ -181,6 +193,7 @@ def create_server(
     """Build the server. ``transport`` replaces the network for Hevy and Vault."""
     settings = settings or Settings()
     state = _State()
+    state.journal = Journal(settings.hevy_journal_path)
 
     @lifespan
     async def connect(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
@@ -189,6 +202,12 @@ def create_server(
         except SecretSourceError as exc:
             logger.error("Startup failed: %s", exc)
             raise
+        if settings.hevy_enable_writes and settings.hevy_journal_path:
+            try:
+                state.journal.check()
+            except JournalError as exc:
+                logger.error("Startup failed: %s", exc)
+                raise
         async with httpx.AsyncClient(
             base_url=settings.hevy_base_url,
             timeout=settings.hevy_timeout_seconds,
@@ -419,8 +438,57 @@ def _dump_routine(exercises: list[RoutineExerciseInput]) -> list[dict[str, Any]]
     return [exercise | {"sets": routine_sets(exercise["sets"])} for exercise in _dump(exercises)]
 
 
+# Hevy answered with a refusal, so the write changed nothing.
+_REFUSALS = (HevyAuthError, HevyConflict, HevyLimitReached, HevyNotFound, HevyRequestError)
+
+
+async def _journaled[R](
+    journal: Journal,
+    tool: str,
+    kind: str,
+    request: Any,
+    write: Callable[[], Awaitable[R]],
+    *,
+    record_id: str | int | None = None,
+    before: BaseModel | None = None,
+    created_id: Callable[[R], Any] = lambda _: None,
+) -> R:
+    """Run one write to Hevy with a journal entry before it and one after.
+
+    ``before`` is the record an update replaces, as Hevy returned it. A create
+    has no id until Hevy answers, so ``created_id`` reads it from the result.
+    """
+    op = journal.begin(
+        caller=_caller(),
+        tool=tool,
+        kind=kind,
+        id=record_id,
+        before=before.model_dump(mode="json") if before else None,
+        request=request,
+    )
+    try:
+        result = await write()
+    except _REFUSALS as exc:
+        journal.end(op, "rejected", error=str(exc))
+        raise
+    except HevyError as exc:
+        journal.end(op, "uncertain", error=str(exc))
+        raise
+    except BaseException as exc:
+        # Anything else may have struck after Hevy saved the write.
+        journal.end(op, "uncertain", error=type(exc).__name__)
+        raise
+    journal.end(op, "ok", id=record_id if record_id is not None else created_id(result))
+    return result
+
+
 def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
     """Register the tools that create and update Hevy data (HEVY_ENABLE_WRITES)."""
+
+    async def journaled[R](
+        tool: str, kind: str, request: Any, write: Callable[[], Awaitable[R]], **entry: Any
+    ) -> R:
+        return await _journaled(state.journal, tool, kind, request, write, **entry)
 
     @mcp.tool(annotations=CREATES)
     async def create_workout(
@@ -436,15 +504,20 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         search_exercise_templates. Not retried if Hevy's answer is lost, so a
         failure says whether to check for the workout before trying again."""
         start, end = _workout_times(start_time, end_time, settings)
-        return await state.hevy.create_workout(
-            {
-                "title": title,
-                "description": description,
-                "start_time": start,
-                "end_time": end,
-                "is_private": is_private,
-                "exercises": _dump(exercises),
-            }
+        workout = {
+            "title": title,
+            "description": description,
+            "start_time": start,
+            "end_time": end,
+            "is_private": is_private,
+            "exercises": _dump(exercises),
+        }
+        return await journaled(
+            "create_workout",
+            "workout",
+            workout,
+            lambda: state.hevy.create_workout(workout),
+            created_id=lambda created: created.id,
         )
 
     @mcp.tool(annotations=UPDATES)
@@ -473,7 +546,8 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
     ) -> Workout:
         """Change a logged workout. Only the fields given change; the rest are kept
         as they are in Hevy. Get the current workout with get_workout first."""
-        current = workout_body(await state.hevy.workout(workout_id))
+        before = await state.hevy.workout(workout_id)
+        current = workout_body(before)
         if title is not None:
             current["title"] = title
         if description is not None:
@@ -487,7 +561,14 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
                 settings,
             )
         current["is_private"] = is_private
-        return await state.hevy.update_workout(workout_id, current)
+        return await journaled(
+            "update_workout",
+            "workout",
+            current,
+            lambda: state.hevy.update_workout(workout_id, current),
+            record_id=workout_id,
+            before=before,
+        )
 
     @mcp.tool(annotations=CREATES)
     async def create_routine(
@@ -503,13 +584,18 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         planned sets, including rep ranges. Find exercise_template_ids with
         search_exercise_templates and folder ids with list_routine_folders. Hevy
         limits how many routines a user can have."""
-        return await state.hevy.create_routine(
-            {
-                "title": title,
-                "folder_id": folder_id,
-                "notes": notes,
-                "exercises": _dump_routine(exercises),
-            }
+        routine = {
+            "title": title,
+            "folder_id": folder_id,
+            "notes": notes,
+            "exercises": _dump_routine(exercises),
+        }
+        return await journaled(
+            "create_routine",
+            "routine",
+            routine,
+            lambda: state.hevy.create_routine(routine),
+            created_id=lambda created: created.id,
         )
 
     @mcp.tool(annotations=UPDATES)
@@ -541,7 +627,8 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
     ) -> Routine:
         """Change a routine. Only the fields given change; the rest are kept as they
         are in Hevy. Get the current routine with get_routine first."""
-        current = routine_body(await state.hevy.routine(routine_id))
+        before = await state.hevy.routine(routine_id)
+        current = routine_body(before)
         if title is not None:
             current["title"] = title
         if folder_id == MY_ROUTINES:
@@ -551,12 +638,25 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         if exercises is not None:
             current["exercises"] = _dump_routine(exercises)
         current["notes"] = notes
-        return await state.hevy.update_routine(routine_id, current)
+        return await journaled(
+            "update_routine",
+            "routine",
+            current,
+            lambda: state.hevy.update_routine(routine_id, current),
+            record_id=routine_id,
+            before=before,
+        )
 
     @mcp.tool(annotations=CREATES)
     async def create_routine_folder(title: str) -> RoutineFolder:
         """Create a routine folder. Hevy puts it first and moves the others down."""
-        return await state.hevy.create_routine_folder(title)
+        return await journaled(
+            "create_routine_folder",
+            "routine_folder",
+            {"title": title},
+            lambda: state.hevy.create_routine_folder(title),
+            created_id=lambda created: created.id,
+        )
 
     @mcp.tool(annotations=CREATES)
     async def create_exercise_template(
@@ -581,7 +681,13 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             "muscle_group": muscle_group,
             "other_muscles": other_muscles,
         }
-        template_id = await state.hevy.create_exercise_template(exercise)
+        template_id = await journaled(
+            "create_exercise_template",
+            "exercise_template",
+            exercise,
+            lambda: state.hevy.create_exercise_template(exercise),
+            created_id=lambda created: created,
+        )
         return ExerciseTemplate(
             id=template_id,
             title=title,
@@ -603,7 +709,13 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
         values = measurements.model_dump(exclude_none=True)
         if not values:
             raise ToolError("Give at least one measurement to log.")
-        await state.hevy.create_body_measurement(day, values)
+        await journaled(
+            "create_body_measurement",
+            "body_measurement",
+            values,
+            lambda: state.hevy.create_body_measurement(day, values),
+            record_id=day.isoformat(),
+        )
         return BodyMeasurement(date=day.isoformat(), **values)
 
     @mcp.tool(annotations=UPDATES)
@@ -625,10 +737,18 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             raise ToolError("Give at least one change or a field to clear.")
         if both := sorted(updates.keys() & set(clear)):
             raise ToolError(f"Fields can't be both changed and cleared: {', '.join(both)}.")
-        values = measurement_values(await state.hevy.body_measurement(day)) | updates
+        before = await state.hevy.body_measurement(day)
+        values = measurement_values(before) | updates
         for field in clear:
             values.pop(field, None)
-        await state.hevy.update_body_measurement(day, values)
+        await journaled(
+            "update_body_measurement",
+            "body_measurement",
+            values,
+            lambda: state.hevy.update_body_measurement(day, values),
+            record_id=day.isoformat(),
+            before=before,
+        )
         return BodyMeasurement(date=day.isoformat(), **values)
 
 

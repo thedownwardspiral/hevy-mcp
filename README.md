@@ -74,6 +74,29 @@ These are only there when `HEVY_ENABLE_WRITES=true`. They change your real Hevy 
 - Creates aren't retried once Hevy may have received them (a timeout, a dropped connection or a 5xx). The error says to check before trying again, so a workout can't be logged twice. Rate limits (429) are still retried.
 - Hevy's routine and custom-exercise limits are reported as limits, and a second body measurement for a day as a conflict.
 
+### Write journal
+
+Hevy's API can't undo a change, so the server keeps a journal of every write. Each write adds two lines of JSON that share an `op` id:
+
+```json
+{"ts":"2026-11-22T18:04:11+00:00","op":"3f9a1c2e","event":"attempt","caller":"you@gmail.com","tool":"update_workout","kind":"workout","id":"b459…","before":{…},"request":{…}}
+{"ts":"2026-11-22T18:04:12+00:00","op":"3f9a1c2e","event":"result","outcome":"ok","id":"b459…"}
+```
+
+- `before` is the whole record as Hevy had it, on updates only. `request` is what was sent. A create's new id is in its `result` line.
+- `outcome` is `ok`, `rejected` (Hevy refused, so nothing changed) or `uncertain` (Hevy may have saved it: check in the app).
+- The first line is saved before anything is sent. If it can't be saved, the write is refused. The server also checks the file at startup.
+- With the Compose file, the journal is `/var/lib/hevy-mcp/journal.jsonl` in the `journal` volume, so it survives upgrades. The log gets a one-line pointer per entry, without the record. With `HEVY_JOURNAL_PATH` empty, the full entries go to the log instead and are lost when the container is recreated.
+- The journal holds your workout and body-measurement data, readable only by the container's user. It never holds the API key. Nothing trims it.
+
+To read it:
+
+```bash
+docker compose exec hevy-mcp cat /var/lib/hevy-mcp/journal.jsonl
+```
+
+To undo an update, find its `attempt` line and give the assistant the `before` record to write back with the matching `update_` tool. A create can only be removed in the Hevy app; its `result` line has the id to look for. [ADR 0003](docs/adr/0003-write-journal.md) has the reasoning.
+
 ## Setup
 
 The examples use placeholders:
@@ -314,6 +337,7 @@ Once Access is configured, the home-network hostname only answers `/health`. Eve
 | `HEVY_RANGE_MAX_PAGES` | `50` | Most pages a range tool walks (500 workouts) |
 | `HEVY_TEMPLATE_CACHE_SECONDS` | `600` | How long exercise templates are cached |
 | `HEVY_ENABLE_WRITES` | `false` | Adds the [write tools](#write-tools), which create and update Hevy data |
+| `HEVY_JOURNAL_PATH` | none (the log) | File the [write journal](#write-journal) is appended to. `compose.yml` sets it to a file in the `journal` volume |
 | `CF_ACCESS_TEAM_DOMAIN` | none | Cloudflare Access team domain, such as `<team>.cloudflareaccess.com`. With the next two settings, every request except `/health` needs a valid Access JWT. Without them the server is unauthenticated. See [ADR 0001](docs/adr/0001-cloudflare-access-for-remote-clients.md) |
 | `CF_ACCESS_AUD` | none | The Access application's AUD tag |
 | `CF_ACCESS_ALLOWED_EMAILS` | none | Comma-separated emails allowed to call the server (case-insensitive) |
