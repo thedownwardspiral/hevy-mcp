@@ -6,6 +6,11 @@ from fastmcp.exceptions import ToolError
 from .conftest import load
 
 
+def matched(result, index: int = 0) -> list[dict]:
+    """The templates one search in a search_exercise_templates result matched."""
+    return result.structured_content["searches"][index]["exercise_templates"]
+
+
 async def test_list_exercise_templates_caps_page_size_at_100(client, fake):
     fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates_page1.json"))
 
@@ -50,8 +55,8 @@ async def test_search_matches_titles_across_pages_ignoring_case(client, fake):
 
     result = await client.call_tool("search_exercise_templates", {"query": "BENCH press"})
 
-    assert result.structured_content["query"] == "BENCH press"
-    assert [t["id"] for t in result.structured_content["exercise_templates"]] == [
+    assert result.structured_content["searches"][0]["query"] == "BENCH press"
+    assert [t["id"] for t in matched(result)] == [
         "05293BCA",
         "3601968B",
     ]
@@ -64,7 +69,7 @@ async def test_search_reuses_the_cached_templates(client, fake):
     await client.call_tool("search_exercise_templates", {"query": "squat"})
     result = await client.call_tool("search_exercise_templates", {"query": "pull"})
 
-    assert [t["title"] for t in result.structured_content["exercise_templates"]] == ["Pull Up"]
+    assert [t["title"] for t in matched(result)] == ["Pull Up"]
     assert len(fake.hevy_requests()) == 1
 
 
@@ -83,12 +88,38 @@ async def test_search_with_no_match_returns_an_empty_list(client, fake):
 
     result = await client.call_tool("search_exercise_templates", {"query": "zercher"})
 
-    assert result.structured_content["exercise_templates"] == []
+    assert matched(result) == []
 
 
 async def test_search_rejects_a_blank_query(client, fake):
     with pytest.raises(ToolError):
         await client.call_tool("search_exercise_templates", {"query": "  "})
+
+    assert fake.requests == []
+
+
+async def test_search_for_several_names_answers_each_in_order(client, fake):
+    fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates.json"))
+
+    result = await client.call_tool(
+        "search_exercise_templates", {"query": ["pull", "zercher", "SQUAT"]}
+    )
+
+    assert [s["query"] for s in result.structured_content["searches"]] == [
+        "pull",
+        "zercher",
+        "SQUAT",
+    ]
+    assert [t["title"] for t in matched(result, 0)] == ["Pull Up"]
+    assert matched(result, 1) == []
+    assert [t["title"] for t in matched(result, 2)] == ["Squat (Barbell)"]
+    assert len(fake.hevy_requests()) == 1
+
+
+@pytest.mark.parametrize("query", [[], ["bench", " "], ["x"] * 51])
+async def test_search_rejects_bad_name_lists(client, fake, query):
+    with pytest.raises(ToolError):
+        await client.call_tool("search_exercise_templates", {"query": query})
 
     assert fake.requests == []
 
@@ -164,7 +195,7 @@ async def test_search_without_page_count_pages_until_a_short_page(client, fake):
 
     result = await client.call_tool("search_exercise_templates", {"query": "bench"})
 
-    assert [t["id"] for t in result.structured_content["exercise_templates"]] == [
+    assert [t["id"] for t in matched(result)] == [
         "T0099",
         "T0100",
     ]
@@ -182,7 +213,7 @@ async def test_search_flags_truncation_at_the_page_cap(make_client, fake):
     async with make_client(HEVY_RANGE_MAX_PAGES="1") as client:
         result = await client.call_tool("search_exercise_templates", {"query": "bench"})
 
-    assert len(result.structured_content["exercise_templates"]) == 100
+    assert len(matched(result)) == 100
     assert result.structured_content["truncated"] is True
     assert len(fake.hevy_requests()) == 1
 

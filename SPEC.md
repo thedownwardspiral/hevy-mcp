@@ -120,7 +120,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 | `get_training_summary(start_date, end_date)` | Workouts in range plus exercise templates, then Analysis |
 | `list_workout_events(since, page, page_size)` | `GET /v1/workouts/events` |
 | `get_exercise_history(exercise_template_id, start_date?, end_date?)` | `GET /v1/exercise_history/{id}` |
-| `search_exercise_templates(query)` | Lists all templates (100 per page), then a case-insensitive substring match on the title |
+| `search_exercise_templates(query)` | Lists all templates (100 per page), then a case-insensitive substring match on the title. `query` is one name or a list of up to 50, answered in order |
 | `list_exercise_templates(page, page_size)` / `get_exercise_template(id)` | `GET /v1/exercise_templates[/{id}]` |
 | `list_body_measurements(page, page_size)` / `get_body_measurement(date)` | `GET /v1/body_measurements[/{date}]` |
 | `get_body_measurements_in_range(start_date, end_date)` | Pages body measurements lazily |
@@ -135,6 +135,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 | `create_routine(title, exercises, folder_id?, notes?)` | `POST /v1/routines` |
 | `update_routine(routine_id, notes, title?, folder_id? (an id or "my_routines"), exercises?)` | `GET`, then `PUT /v1/routines/{id}` |
 | `create_routine_folder(title)` | `POST /v1/routine_folders` |
+| `create_plan(title, routines)` | `POST /v1/routine_folders`, then `POST /v1/routines` for each routine with the new folder's id; stops at the first refusal |
 | `create_exercise_template(title, exercise_type, equipment_category, muscle_group, other_muscles?)` | `POST /v1/exercise_templates` |
 | `create_body_measurement(date, measurements)` | `POST /v1/body_measurements` |
 | `update_body_measurement(date, changes?, clear?)` | `GET`, then `PUT /v1/body_measurements/{date}` |

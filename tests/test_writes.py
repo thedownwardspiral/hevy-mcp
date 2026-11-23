@@ -348,6 +348,94 @@ async def test_create_routine_folder(writer, fake):
     assert sent(request) == {"routine_folder": {"title": "Push Pull 🏋️‍♂️"}}
 
 
+# Plans
+
+
+def created_routine(title: str, routine_id: str) -> httpx.Response:
+    routine = load("hevy/routine.json")["routine"] | {"id": routine_id, "title": title}
+    return httpx.Response(201, json={"routine": routine})
+
+
+def plan_routine(title: str) -> dict:
+    return {"title": title, "exercises": [PLANNED]}
+
+
+async def test_create_plan_puts_every_routine_in_a_new_folder(writer, fake):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post("/v1/routines", created_routine("Push", "r1"), created_routine("Pull", "r2"))
+
+    result = await writer.call_tool(
+        "create_plan",
+        {
+            "title": "Push Pull 🏋️‍♂️",
+            "routines": [plan_routine("Push") | {"notes": "Heavy"}, plan_routine("Pull")],
+        },
+    )
+
+    assert result.structured_content["folder"]["id"] == 42
+    assert [r["id"] for r in result.structured_content["routines"]] == ["r1", "r2"]
+    [folder] = fake.hevy_requests("/v1/routine_folders")
+    assert sent(folder) == {"routine_folder": {"title": "Push Pull 🏋️‍♂️"}}
+    push, pull = (sent(r)["routine"] for r in fake.hevy_requests("/v1/routines"))
+    assert (push["title"], push["folder_id"], push["notes"]) == ("Push", 42, "Heavy")
+    assert (pull["title"], pull["folder_id"], pull["notes"]) == ("Pull", 42, None)
+    assert push["exercises"][0]["sets"][0]["weight_kg"] == 100
+
+
+async def test_create_plan_stops_at_a_refused_routine_and_says_what_exists(writer, fake):
+    fake.post(
+        "/v1/routine_folders", status=201, json={"routine_folder": load("hevy/routine_folder.json")}
+    )
+    fake.post(
+        "/v1/routines",
+        created_routine("Push", "r1"),
+        httpx.Response(403, json={"error": "routine-limit-exceeded"}),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        await writer.call_tool(
+            "create_plan",
+            {
+                "title": "PPL",
+                "routines": [plan_routine("Push"), plan_routine("Pull"), plan_routine("Legs")],
+            },
+        )
+
+    message = str(raised.value)
+    assert "stopped at routine 'Pull'" in message
+    assert "routine limit is reached" in message
+    assert "'Push' (id r1)" in message
+    assert "folder_id 42" in message
+    assert len(fake.hevy_requests("/v1/routines")) == 2
+
+
+async def test_create_plan_checks_every_routine_before_writing(writer, fake):
+    backwards = {
+        "exercise_template_id": "05293BCA",
+        "sets": [{"rep_range": {"start": 12, "end": 8}}],
+    }
+
+    with pytest.raises(ToolError):
+        await writer.call_tool(
+            "create_plan",
+            {
+                "title": "PPL",
+                "routines": [plan_routine("Push"), {"title": "Pull", "exercises": [backwards]}],
+            },
+        )
+
+    assert fake.requests == []
+
+
+async def test_create_plan_needs_a_routine(writer, fake):
+    with pytest.raises(ToolError):
+        await writer.call_tool("create_plan", {"title": "PPL", "routines": []})
+
+    assert fake.requests == []
+
+
 # Custom exercises
 
 
@@ -408,7 +496,8 @@ async def test_create_exercise_template_refreshes_the_search_cache(writer, fake)
     )
     result = await writer.call_tool("search_exercise_templates", {"query": "landmine"})
 
-    assert [t["id"] for t in result.structured_content["exercise_templates"]] == ["123"]
+    [search] = result.structured_content["searches"]
+    assert [t["id"] for t in search["exercise_templates"]] == ["123"]
 
 
 async def test_create_exercise_template_over_the_limit(writer, fake):

@@ -143,9 +143,17 @@ class TrainingSummary(BaseModel):
     )
 
 
-class ExerciseTemplateSearch(BaseModel):
+class ExerciseTemplateMatches(BaseModel):
+    """The templates matching one of the searched names."""
+
     query: str
     exercise_templates: list[ExerciseTemplate]
+
+
+class ExerciseTemplateSearch(BaseModel):
+    searches: list[ExerciseTemplateMatches] = Field(
+        description="One entry per searched name, in the order given."
+    )
     truncated: bool = Field(
         description="True if the page cap stopped the template listing early, so some "
         "matches may be missing."
@@ -260,6 +268,13 @@ class RoutineFolder(HevyModel):
     created_at: str | None = None
 
 
+class Plan(BaseModel):
+    """A routine folder and the routines created in it."""
+
+    folder: RoutineFolder
+    routines: list[Routine]
+
+
 class RoutineFolderPage(HevyModel):
     page: int | None = None
     page_count: int | None = None
@@ -331,6 +346,16 @@ class RoutineExerciseInput(HevyInput):
     rest_seconds: Count | None = None
     notes: str | None = None
     sets: list[RoutineSetInput] = Field(min_length=1)
+
+
+class PlanRoutineInput(HevyInput):
+    """One routine of a plan."""
+
+    title: str
+    exercises: list[RoutineExerciseInput] = Field(
+        min_length=1, description="The exercises in order, each with its planned sets in order."
+    )
+    notes: str | None = None
 
 
 class BodyMeasurementInput(HevyInput):

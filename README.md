@@ -48,7 +48,7 @@ There are four layers, and each one fails closed:
 | `get_training_summary(start_date, end_date)` | Workout count, duration, volume, sets and reps, per-exercise and per-muscle-group totals (warm-ups excluded) |
 | `list_workout_events(since, page, page_size)` | Workout updates and deletions since a date |
 | `get_exercise_history(exercise_template_id, start_date?, end_date?)` | Every logged set of one exercise |
-| `search_exercise_templates(query)` | Templates whose title contains the query (case-insensitive) |
+| `search_exercise_templates(query)` | Templates whose title contains the query (case-insensitive); pass a list of names to look up several at once |
 | `list_exercise_templates(page, page_size)` / `get_exercise_template(id)` | Templates with muscle groups and equipment |
 | `list_body_measurements(page, page_size)` / `get_body_measurement(date)` | Body measurements |
 | `get_body_measurements_in_range(start_date, end_date)` | Every body measurement in a date range |
@@ -66,6 +66,7 @@ These are only there when `HEVY_ENABLE_WRITES=true`. They change your real Hevy 
 | `update_workout` | Changes a workout. `is_private` is required, because Hevy doesn't report it and makes the workout public when it's left out |
 | `create_routine` / `update_routine` | Creates or changes a routine, with rest times and planned sets including rep ranges |
 | `create_routine_folder` | Creates a routine folder, placed first |
+| `create_plan` | Creates a routine folder and several routines in it in one call; if Hevy refuses a routine, it stops and says what was already created |
 | `create_exercise_template` | Creates a custom exercise |
 | `create_body_measurement` / `update_body_measurement` | Logs or changes the day's measurements. `clear` erases named fields |
 

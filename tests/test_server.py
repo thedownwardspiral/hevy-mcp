@@ -33,6 +33,7 @@ WRITE_TOOLS = {
     "create_routine": "create",
     "update_routine": "update",
     "create_routine_folder": "create",
+    "create_plan": "create",
     "create_exercise_template": "create",
     "create_body_measurement": "create",
     "update_body_measurement": "update",

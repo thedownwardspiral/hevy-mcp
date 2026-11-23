@@ -3,6 +3,7 @@
 import logging
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
+from functools import partial
 from importlib.metadata import version
 from typing import Annotated, Any, Literal
 
@@ -49,11 +50,14 @@ from hevy_mcp.models import (
     EquipmentCategory,
     ExerciseHistory,
     ExerciseTemplate,
+    ExerciseTemplateMatches,
     ExerciseTemplatePage,
     ExerciseTemplateSearch,
     ExerciseType,
     MeasurementField,
     MuscleGroup,
+    Plan,
+    PlanRoutineInput,
     Routine,
     RoutineExerciseInput,
     RoutineFolder,
@@ -81,6 +85,9 @@ CREATES = ToolAnnotations(
 UPDATES = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
 )
+# Enough for every exercise of a long plan; search is local, so this only
+# bounds the size of one answer.
+MAX_SEARCH_QUERIES = 50
 # update_routine's folder_id for Hevy's default folder, which has no id.
 MY_ROUTINES = "my_routines"
 # How the tool-call log names the caller when Access isn't configured.
@@ -332,19 +339,33 @@ def create_server(
     @mcp.tool(annotations=READ_ONLY)
     async def search_exercise_templates(
         query: Annotated[
-            str,
-            Field(description='Part of the exercise name, e.g. "bench press". Case-insensitive.'),
+            str | list[str],
+            Field(
+                description='Part of an exercise name, e.g. "bench press", or a list of '
+                "them to look up several exercises at once. Case-insensitive."
+            ),
         ],
     ) -> ExerciseTemplateSearch:
         """Find exercise templates whose title contains the query, ignoring case.
-        Use it to get the exercise_template_id that get_exercise_history needs."""
-        needle = query.strip().casefold()
-        if not needle:
-            raise ToolError("query must not be blank.")
+        Pass a list to look up every exercise of a routine or workout in one call.
+        Use it to get the exercise_template_id that other tools need."""
+        queries = [query] if isinstance(query, str) else query
+        if not queries:
+            raise ToolError("Give at least one name to search for.")
+        if len(queries) > MAX_SEARCH_QUERIES:
+            raise ToolError(f"Search for at most {MAX_SEARCH_QUERIES} names at once.")
+        needles = [q.strip().casefold() for q in queries]
+        if not all(needles):
+            raise ToolError("Search names must not be blank.")
         templates, truncated = await state.hevy.all_exercise_templates()
         return ExerciseTemplateSearch(
-            query=query,
-            exercise_templates=[t for t in templates if needle in (t.title or "").casefold()],
+            searches=[
+                ExerciseTemplateMatches(
+                    query=q,
+                    exercise_templates=[t for t in templates if n in (t.title or "").casefold()],
+                )
+                for q, n in zip(queries, needles, strict=True)
+            ],
             truncated=truncated,
         )
 
@@ -436,6 +457,20 @@ def _dump(items: list[Any]) -> list[dict[str, Any]]:
 
 def _dump_routine(exercises: list[RoutineExerciseInput]) -> list[dict[str, Any]]:
     return [exercise | {"sets": routine_sets(exercise["sets"])} for exercise in _dump(exercises)]
+
+
+def _unfinished_plan(
+    folder: RoutineFolder, created: list[Routine], failed: str, error: HevyError
+) -> str:
+    """Explain a create_plan that stopped partway, so the client can finish it."""
+    done = ", ".join(f"{r.title!r} (id {r.id})" for r in created) or "none"
+    return (
+        f"The plan stopped at routine {failed!r}: {error} Already created: routine folder "
+        f"{folder.title!r} (folder_id {folder.id}) and routines: {done}. The routines "
+        f"after {failed!r} were not tried. Hevy's API can't delete, so add the missing "
+        f"routines with create_routine and folder_id {folder.id} instead of creating "
+        "the plan again."
+    )
 
 
 # Hevy answered with a refusal, so that request changed nothing.
@@ -659,6 +694,55 @@ def _add_write_tools(mcp: FastMCP, state: _State, settings: Settings) -> None:
             lambda: state.hevy.create_routine_folder(title),
             created_id=lambda created: created.id,
         )
+
+    @mcp.tool(annotations=CREATES)
+    async def create_plan(
+        title: Annotated[
+            str, Field(description="The plan's name, which becomes its routine folder's title.")
+        ],
+        routines: Annotated[
+            list[PlanRoutineInput],
+            Field(min_length=1, description="The plan's routines, in order."),
+        ],
+    ) -> Plan:
+        """Create a plan: a new routine folder holding several routines, such as the
+        days of a split, in one call. Find every exercise_template_id first with one
+        search_exercise_templates call given a list of names. If Hevy refuses a
+        routine, for example at its routine limit, this stops and says what was
+        already created; Hevy's API can't delete, so finish the plan from there
+        rather than starting it again."""
+        # Build every routine before the first write, so bad input creates nothing.
+        bodies = [
+            {
+                "title": routine.title,
+                "notes": routine.notes,
+                "exercises": _dump_routine(routine.exercises),
+            }
+            for routine in routines
+        ]
+        folder = await journaled(
+            "create_plan",
+            "routine_folder",
+            {"title": title},
+            lambda: state.hevy.create_routine_folder(title),
+            created_id=lambda created: created.id,
+        )
+        created: list[Routine] = []
+        for body in bodies:
+            routine = {"title": body["title"], "folder_id": folder.id} | body
+            try:
+                created.append(
+                    await journaled(
+                        "create_plan",
+                        "routine",
+                        routine,
+                        partial(state.hevy.create_routine, routine),
+                        created_id=lambda new: new.id,
+                    )
+                )
+            except HevyError as exc:
+                raise ToolError(_unfinished_plan(folder, created, body["title"], exc)) from None
+        return Plan(folder=folder, routines=created)
 
     @mcp.tool(annotations=CREATES)
     async def create_exercise_template(
