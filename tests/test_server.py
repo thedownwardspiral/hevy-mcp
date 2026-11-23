@@ -37,7 +37,11 @@ WRITE_TOOLS = {
     "create_exercise_template": "create",
     "create_body_measurement": "create",
     "update_body_measurement": "update",
+    # Saves a plan shown with preview_plan, once the user asks.
+    "save_plan": "create",
 }
+# Listed only with writes on, though it only shows a plan.
+PREVIEW_TOOLS = {"preview_plan"}
 
 
 async def test_every_tool_is_listed_and_read_only(client):
@@ -53,7 +57,7 @@ async def test_every_tool_is_listed_and_read_only(client):
 async def test_write_tools_are_listed_only_when_enabled(writer, client):
     tools = {t.name: t for t in await writer.list_tools()}
 
-    assert tools.keys() == EXPECTED_TOOLS | WRITE_TOOLS.keys()
+    assert tools.keys() == EXPECTED_TOOLS | WRITE_TOOLS.keys() | PREVIEW_TOOLS
     for name, kind in WRITE_TOOLS.items():
         hints = tools[name].annotations
         assert tools[name].description, name
@@ -61,7 +65,7 @@ async def test_write_tools_are_listed_only_when_enabled(writer, client):
         assert hints.destructive_hint is (kind == "update"), name
         assert hints.idempotent_hint is (kind == "update"), name
         assert hints.open_world_hint is True, name
-    for name in EXPECTED_TOOLS:
+    for name in EXPECTED_TOOLS | PREVIEW_TOOLS:
         assert tools[name].annotations.read_only_hint is True, name
     assert "Confirm" in writer.instructions
     assert "Read-only" in client.instructions

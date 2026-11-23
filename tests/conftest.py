@@ -113,10 +113,11 @@ def make_client(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[...
     """Build a client for a fresh server configured from the given env vars.
 
     Defaults to the ``HEVY_API_KEY`` override and no retry delay; pass
-    ``HEVY_API_KEY=None`` to drop the override.
+    ``HEVY_API_KEY=None`` to drop the override. ``extensions`` are the MCP
+    extensions the client advertises, such as UI support.
     """
 
-    def _make(**env: str | None) -> Client:
+    def _make(*, extensions: list[Any] | None = None, **env: str | None) -> Client:
         for key in list(os.environ):
             prefixed = key.startswith(("HEVY_", "VAULT_", "MCP_", "CF_ACCESS_"))
             if prefixed or key in {"TZ", "LOG_LEVEL"}:
@@ -125,7 +126,7 @@ def make_client(fake: FakeHTTP, monkeypatch: pytest.MonkeyPatch) -> Callable[...
         for key, value in settings.items():
             if value is not None:
                 monkeypatch.setenv(key, value)
-        return Client(create_server(transport=fake.transport))
+        return Client(create_server(transport=fake.transport), extensions=extensions)
 
     return _make
 
