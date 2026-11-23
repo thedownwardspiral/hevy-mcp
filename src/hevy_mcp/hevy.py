@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 class HevyError(Exception):
     """Base for errors that tools report to the MCP client as-is."""
 
+    # Set when a write was retried and an earlier try got no clear answer, so
+    # Hevy may have saved it whatever the last try's answer says.
+    maybe_applied = False
+
 
 class HevyAuthError(HevyError):
     def __init__(self, status: int) -> None:
@@ -95,6 +99,23 @@ MAX_TEMPLATE_PAGE_SIZE = 100
 
 def _is_transient(status: int) -> bool:
     return status == 429 or status >= 500
+
+
+def _refusal(response: httpx.Response, what: str, limit: str | None) -> HevyError | None:
+    """The error for a response in which Hevy refused the request, or None if
+    the failure is one worth retrying."""
+    status = response.status_code
+    if status == 403 and limit:
+        return HevyLimitReached(limit, _error_detail(response))
+    if status in (401, 403):
+        return HevyAuthError(status)
+    if status == 404:
+        return HevyNotFound(what)
+    if status == 409:
+        return HevyConflict(what)
+    if not _is_transient(status):
+        return HevyRequestError(status, _error_detail(response))
+    return None
 
 
 def _is_last_page(number: int, page_count: int | None, items: int, page_size: int) -> bool:
@@ -164,6 +185,8 @@ class HevyClient:
         """
         attempts = self._max_retries + 1
         safe_to_repeat = method != "POST"
+        # Whether an earlier try of a write may have been saved by Hevy.
+        maybe_applied = False
         for attempt in range(1, attempts + 1):
             try:
                 response = await self._http.request(
@@ -181,27 +204,25 @@ class HevyClient:
                 reason = "request timed out"
                 if not safe_to_repeat:
                     raise HevyWriteUncertain(what, reason) from None
+                maybe_applied = method != "GET"
             except httpx.TransportError as exc:
                 reason = f"connection failed: {type(exc).__name__}"
                 if not safe_to_repeat:
                     raise HevyWriteUncertain(what, reason) from None
+                maybe_applied = method != "GET"
             else:
                 status = response.status_code
                 if response.is_success:
                     return _body(response)
-                if status == 403 and limit:
-                    raise HevyLimitReached(limit, _error_detail(response))
-                if status in (401, 403):
-                    raise HevyAuthError(status)
-                if status == 404:
-                    raise HevyNotFound(what)
-                if status == 409:
-                    raise HevyConflict(what)
-                if not _is_transient(status):
-                    raise HevyRequestError(status, _error_detail(response))
+                refusal = _refusal(response, what, limit)
+                if refusal:
+                    refusal.maybe_applied = maybe_applied
+                    raise refusal
                 reason = f"HTTP {status}"
-                if status != 429 and not safe_to_repeat:
-                    raise HevyWriteUncertain(what, reason)
+                if status != 429:
+                    if not safe_to_repeat:
+                        raise HevyWriteUncertain(what, reason)
+                    maybe_applied = method != "GET"
 
             if attempt < attempts:
                 # Full jitter: a random delay up to an exponentially growing cap.

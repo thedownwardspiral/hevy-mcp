@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Off by default: only then are the tools that create and update Hevy data
     # registered at all.
     hevy_enable_writes: bool = False
+    # Where the journal of writes is appended, one JSON line per entry. Unset,
+    # the journal goes to the log, which is lost when the container is recreated.
+    hevy_journal_path: Path | None = None
 
     # Vault, used when HEVY_API_KEY is not set. VAULT_ADDR has no default so
     # that no real hostname is committed. Each AppRole credential can instead
@@ -70,7 +73,7 @@ class Settings(BaseSettings):
     def _upper_log_level(cls, value: str) -> str:
         return value.upper()
 
-    @field_validator("cf_access_team_domain", "cf_access_aud", mode="before")
+    @field_validator("cf_access_team_domain", "cf_access_aud", "hevy_journal_path", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: Any) -> Any:
         if isinstance(value, str):
