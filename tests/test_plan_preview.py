@@ -65,22 +65,39 @@ def preview_id(result) -> str:
     return re.search(r"preview_id is (\S+)\.", result.content[0].text).group(1)
 
 
-def actions(result, kind: str) -> list[dict[str, Any]]:
-    """Every action of one kind in a preview's UI tree."""
+def nodes_where(result, key: str, value: str) -> list[dict[str, Any]]:
+    """Every node in a preview's UI tree whose key has this value."""
     found = []
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
-            if node.get("action") == kind:
+            if node.get(key) == value:
                 found.append(node)
-            for value in node.values():
-                walk(value)
+            for child in node.values():
+                walk(child)
         elif isinstance(node, list):
-            for value in node:
-                walk(value)
+            for child in node:
+                walk(child)
 
     walk(result.structured_content["view"])
     return found
+
+
+def actions(result, kind: str) -> list[dict[str, Any]]:
+    """Every action of one kind in a preview's UI tree."""
+    return nodes_where(result, "action", kind)
+
+
+def texts(node: Any) -> list[str]:
+    """The text a component shows, in order."""
+    if isinstance(node, dict):
+        own = [node["content"]] if isinstance(node.get("content"), str) else []
+        return own + [t for child in node.get("children", []) for t in texts(child)]
+    return []
+
+
+def classes(cell: dict[str, Any]) -> list[str]:
+    return (cell.get("cssClass") or "").split()
 
 
 async def preview(client, plan=PLAN):
@@ -95,7 +112,8 @@ async def test_preview_shows_the_plan_and_writes_nothing(ui_writer, hevy):
         assert shown in ui
     # 100 kg and 140 kg in the user's pounds, the warmup set counted apart.
     assert "3 × 8 reps @ 220.5 lb" in ui
-    assert "5 reps @ 132.3 lb (warmup); 5 reps @ 308.6 lb" in ui
+    shown = texts(result.structured_content["view"])
+    assert "5 reps @ 132.3 lb (warmup)" in shown and "5 reps @ 308.6 lb" in shown
     assert writes(hevy) == []
     text = result.content[0].text
     assert "call save_plan with that preview_id" in text and "Don't call create_plan" in text
@@ -104,6 +122,38 @@ async def test_preview_shows_the_plan_and_writes_nothing(ui_writer, hevy):
     assert "didn't appear" in text
     assert "   - Bench Press (Barbell): 3 × 8 reps @ 220.5 lb" in text
     assert "   - Squat (Barbell): 5 reps @ 132.3 lb (warmup); 5 reps @ 308.6 lb; rest 3 min" in text
+
+
+async def test_long_sets_and_notes_wrap_and_keep_rest_on_the_card(ui_writer, hevy):
+    # Prefab's table cells don't wrap, so a long line of sets or a long note
+    # used to widen the table and scroll the Rest column out of the card.
+    sets = [{"type": "warmup", "reps": 10, "weight_kg": 40}, {"type": "warmup", "reps": 5}]
+    sets += [{"rep_range": {"start": 6, "end": 8}, "weight_kg": 100}] * 4
+    sets += [{"type": "dropset", "reps": 12, "weight_kg": 70}]
+    note = "Video: youtube.com/watch?v=Kx9ZqR4tWm2Lp8sNb3VhYc7DfGjT1aUe6Qo"
+    squat = SQUAT | {"sets": sets, "notes": note}
+    bench = BENCH | {"rest_seconds": 120}
+    plan = {"title": "P", "routines": [{"title": "A", "exercises": [squat, bench]}]}
+
+    result = await preview(ui_writer, plan)
+
+    rows = nodes_where(result, "type", "TableRow")
+    [squat_row, bench_row] = [r for r in rows if r["children"][0]["type"] == "TableCell"]
+    name, sets_cell, rest = squat_row["children"]
+    for cell in (name, sets_cell):
+        # wrap-anywhere, not break-words: only it lets a long unbroken word
+        # in the note narrow the column.
+        assert {"whitespace-normal", "wrap-anywhere", "align-top"} <= set(classes(cell))
+    assert "whitespace-normal" not in classes(rest) and "align-top" in classes(rest)
+    assert note in texts(name)
+    assert texts(sets_cell) == [
+        "10 reps @ 88.2 lb (warmup)",
+        "5 reps (warmup)",
+        "4 × 6–8 reps @ 220.5 lb",
+        "12 reps @ 154.3 lb (dropset)",
+    ]
+    assert texts(rest) == ["3 min"]
+    assert texts(bench_row["children"][2]) == ["2 min"]
 
 
 async def test_the_button_asks_in_the_chat_and_calls_no_tool(ui_writer, hevy):
