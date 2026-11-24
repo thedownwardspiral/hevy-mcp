@@ -49,9 +49,12 @@ METRES_PER_MILE = 1609.344
 # How long a preview can be saved, and how many wait at once.
 PREVIEW_SECONDS = 3600
 MAX_PREVIEWS = 50
-# A table cell whose text wraps, top-aligned so a row of several lines reads
-# from the top.
-WRAP = "whitespace-normal break-words align-top"
+# Table cells top-aligned, so a row of several lines reads from the top.
+TOP = "align-top"
+# A top-aligned cell whose text wraps. `wrap-anywhere` (overflow-wrap:
+# anywhere) also lets a long unbroken word, like a URL in a note, narrow the
+# column; `break-words` would still size the column to the whole word.
+WRAP = f"whitespace-normal wrap-anywhere {TOP}"
 
 
 @dataclass(frozen=True)
@@ -273,7 +276,7 @@ def _routine_card(
                             for group in set_groups(exercise["sets"], weight_unit, distance_unit):
                                 Text(group)
                         rest = exercise.get("rest_seconds")
-                        TableCell(_duration(rest) if rest else "—", css_class="align-top")
+                        TableCell(_duration(rest) if rest else "—", css_class=TOP)
 
 
 def plan_view(

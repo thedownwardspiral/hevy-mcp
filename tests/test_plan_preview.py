@@ -65,7 +65,7 @@ def preview_id(result) -> str:
     return re.search(r"preview_id is (\S+)\.", result.content[0].text).group(1)
 
 
-def find(result, key: str, value: str) -> list[dict[str, Any]]:
+def nodes_where(result, key: str, value: str) -> list[dict[str, Any]]:
     """Every node in a preview's UI tree whose key has this value."""
     found = []
 
@@ -85,7 +85,19 @@ def find(result, key: str, value: str) -> list[dict[str, Any]]:
 
 def actions(result, kind: str) -> list[dict[str, Any]]:
     """Every action of one kind in a preview's UI tree."""
-    return find(result, "action", kind)
+    return nodes_where(result, "action", kind)
+
+
+def texts(node: Any) -> list[str]:
+    """The text a component shows, in order."""
+    if isinstance(node, dict):
+        own = [node["content"]] if isinstance(node.get("content"), str) else []
+        return own + [t for child in node.get("children", []) for t in texts(child)]
+    return []
+
+
+def classes(cell: dict[str, Any]) -> list[str]:
+    return (cell.get("cssClass") or "").split()
 
 
 async def preview(client, plan=PLAN):
@@ -100,7 +112,8 @@ async def test_preview_shows_the_plan_and_writes_nothing(ui_writer, hevy):
         assert shown in ui
     # 100 kg and 140 kg in the user's pounds, the warmup set counted apart.
     assert "3 × 8 reps @ 220.5 lb" in ui
-    assert '"5 reps @ 132.3 lb (warmup)"' in ui and '"5 reps @ 308.6 lb"' in ui
+    shown = texts(result.structured_content["view"])
+    assert "5 reps @ 132.3 lb (warmup)" in shown and "5 reps @ 308.6 lb" in shown
     assert writes(hevy) == []
     text = result.content[0].text
     assert "call save_plan with that preview_id" in text and "Don't call create_plan" in text
@@ -111,29 +124,28 @@ async def test_preview_shows_the_plan_and_writes_nothing(ui_writer, hevy):
     assert "   - Squat (Barbell): 5 reps @ 132.3 lb (warmup); 5 reps @ 308.6 lb; rest 3 min" in text
 
 
-def texts(node: Any) -> list[str]:
-    """The text a component shows, in order."""
-    if isinstance(node, dict):
-        own = [node["content"]] if isinstance(node.get("content"), str) else []
-        return own + [t for child in node.get("children", []) for t in texts(child)]
-    return []
-
-
-async def test_long_sets_wrap_and_keep_rest_on_the_card(ui_writer, hevy):
-    # Prefab's table cells don't wrap, so one long line of sets used to widen
-    # the table and scroll the Rest column out of the card.
+async def test_long_sets_and_notes_wrap_and_keep_rest_on_the_card(ui_writer, hevy):
+    # Prefab's table cells don't wrap, so a long line of sets or a long note
+    # used to widen the table and scroll the Rest column out of the card.
     sets = [{"type": "warmup", "reps": 10, "weight_kg": 40}, {"type": "warmup", "reps": 5}]
     sets += [{"rep_range": {"start": 6, "end": 8}, "weight_kg": 100}] * 4
     sets += [{"type": "dropset", "reps": 12, "weight_kg": 70}]
-    plan = {"title": "P", "routines": [{"title": "A", "exercises": [SQUAT | {"sets": sets}]}]}
+    note = "Pause at the bottom, see https://example.com/a-very-long-unbroken-coaching-link"
+    squat = SQUAT | {"sets": sets, "notes": note}
+    bench = BENCH | {"rest_seconds": 120}
+    plan = {"title": "P", "routines": [{"title": "A", "exercises": [squat, bench]}]}
 
     result = await preview(ui_writer, plan)
 
-    [row] = [r for r in find(result, "type", "TableRow") if "3 min" in texts(r)]
-    name, sets_cell, rest = row["children"]
+    rows = nodes_where(result, "type", "TableRow")
+    [squat_row, bench_row] = [r for r in rows if r["children"][0]["type"] == "TableCell"]
+    name, sets_cell, rest = squat_row["children"]
     for cell in (name, sets_cell):
-        assert "whitespace-normal" in cell["cssClass"].split()
-    assert "whitespace-normal" not in (rest.get("cssClass") or "")
+        # wrap-anywhere, not break-words: only it lets a long unbroken word
+        # in the note narrow the column.
+        assert {"whitespace-normal", "wrap-anywhere", "align-top"} <= set(classes(cell))
+    assert "whitespace-normal" not in classes(rest) and "align-top" in classes(rest)
+    assert note in texts(name)
     assert texts(sets_cell) == [
         "10 reps @ 88.2 lb (warmup)",
         "5 reps (warmup)",
@@ -141,6 +153,7 @@ async def test_long_sets_wrap_and_keep_rest_on_the_card(ui_writer, hevy):
         "12 reps @ 154.3 lb (dropset)",
     ]
     assert texts(rest) == ["3 min"]
+    assert texts(bench_row["children"][2]) == ["2 min"]
 
 
 async def test_the_button_asks_in_the_chat_and_calls_no_tool(ui_writer, hevy):
