@@ -49,6 +49,9 @@ METRES_PER_MILE = 1609.344
 # How long a preview can be saved, and how many wait at once.
 PREVIEW_SECONDS = 3600
 MAX_PREVIEWS = 50
+# A table cell whose text wraps, top-aligned so a row of several lines reads
+# from the top.
+WRAP = "whitespace-normal break-words align-top"
 
 
 @dataclass(frozen=True)
@@ -149,11 +152,16 @@ def _one_set(s: dict[str, Any], weight_unit: str, distance_unit: str) -> str:
     return text if kind == "normal" else f"{text} ({kind})"
 
 
-def describe_sets(sets: list[dict[str, Any]], weight_unit: str, distance_unit: str) -> str:
-    """The planned sets in a line, with repeated sets counted: "3 × 8 reps @ 60 kg"."""
+def set_groups(sets: list[dict[str, Any]], weight_unit: str, distance_unit: str) -> list[str]:
+    """The planned sets, with repeated sets counted: ["3 × 8 reps @ 60 kg", ...]."""
     described = [_one_set(s, weight_unit, distance_unit) for s in sets]
     runs = [(text, len(list(run))) for text, run in groupby(described)]
-    return "; ".join(text if count == 1 else f"{count} × {text}" for text, count in runs)
+    return [text if count == 1 else f"{count} × {text}" for text, count in runs]
+
+
+def describe_sets(sets: list[dict[str, Any]], weight_unit: str, distance_unit: str) -> str:
+    """The planned sets in a line: "5 reps @ 60 kg (warmup); 3 × 5 reps @ 100 kg"."""
+    return "; ".join(set_groups(sets, weight_unit, distance_unit))
 
 
 def _outline(plan: PendingPlan, titles: dict[str, str], units: tuple[str, str]) -> list[str]:
@@ -248,9 +256,11 @@ def _routine_card(
             with TableBody():
                 for exercise in routine["exercises"]:
                     with TableRow():
+                        # Table cells don't wrap by default, so long sets or notes
+                        # would widen the table and scroll Rest out of the card.
                         # The notes go under the name: a row of their own would
                         # squeeze them into the first of three columns.
-                        with TableCell(), Column(gap=1):
+                        with TableCell(css_class=WRAP), Column(gap=1):
                             with Row(gap=2, align="center"):
                                 Text(titles[exercise["exercise_template_id"]], bold=True)
                                 if exercise.get("superset_id") is not None:
@@ -258,9 +268,12 @@ def _routine_card(
                                     Badge(f"Superset {label}", variant="outline")
                             if exercise.get("notes"):
                                 Muted(exercise["notes"])
-                        TableCell(describe_sets(exercise["sets"], weight_unit, distance_unit))
+                        # One line per group of sets.
+                        with TableCell(css_class=WRAP), Column(gap=0):
+                            for group in set_groups(exercise["sets"], weight_unit, distance_unit):
+                                Text(group)
                         rest = exercise.get("rest_seconds")
-                        TableCell(_duration(rest) if rest else "—")
+                        TableCell(_duration(rest) if rest else "—", css_class="align-top")
 
 
 def plan_view(
