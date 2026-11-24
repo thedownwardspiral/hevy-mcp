@@ -75,7 +75,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 
 **Stack**
 - Python 3.15, with dependencies managed by `uv` and a lockfile committed.
-- FastMCP 4.x (the latest release at the time of writing is 4.1.4), pinned `>=4.1,<5`. Server-initiated sampling and roots were removed in 4.0 and are not needed here.
+- FastMCP 4.x, pinned `fastmcp[apps]>=4.2.5,<5`. Server-initiated sampling and roots were removed in 4.0 and are not needed here.
 - `httpx` async client for Hevy calls, and Pydantic models for Hevy response shapes.
 
 **Modules**
@@ -101,6 +101,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 - Maximum page sizes: workouts 10, workout events 10, routines 10, routine folders 10, body measurements 10, exercise templates 100.
 - Workouts have no date filter. Range tools page newest first and stop once they pass the start date. Body measurements are handled the same way. Exercise history does take `start_date` and `end_date` natively.
 - Hevy stores weights in kg and distances in metres. User info carries the preferred `weight_unit` and `distance_unit`.
+- Hevy's JSON can hold NaN, Infinity, or a literal like 1e999 that is read as Infinity. The server keeps such a value as read, so anything summed over it is unknown rather than too low. Tool results show it as null, because JSON can't carry it and FastMCP fails a tool call that returns one. A write that would send one back is refused before anything is sent, so an update never erases it by sending null.
 - Hevy asks scheduled jobs not to fire exactly on the hour. That doesn't apply here (there's no polling), but nothing in the server should poll.
 - Where the live write endpoints differ from the OpenAPI document (found with a live test on 2026-11-01):
   - `PUT /v1/routines/{id}` refuses `rep_range: null`, though the document marks it nullable and `GET` returns it. Sets without a range leave the field out.
@@ -152,7 +153,7 @@ A small, self-hosted MCP server that exposes my Hevy data as MCP tools: read-onl
 
 - Range tools cap how many pages they walk (configurable, with a sensible default such as 50 pages, or 500 workouts). If the cap stops them early, the result says it was truncated.
 - Exercise templates are cached in memory with a short TTL, because they change rarely and `search_exercise_templates` and `get_training_summary` both need the full list.
-- The training summary covers the workout count, total duration, total volume (sum of weight_kg × reps over working sets, with warm-ups excluded), total sets and reps, per-exercise set counts and top weight, and set counts per primary muscle group.
+- The training summary covers the workout count, total duration, total volume (sum of weight_kg × reps over working sets, with warm-ups excluded), total sets and reps, per-exercise set counts and top weight, and set counts per primary muscle group. A volume, rep total or top weight is null when a value in it isn't a finite number, or it overflows.
 - Dates are ISO 8601. Date-only inputs are interpreted in the server's configured timezone (`TZ`, default UTC).
 
 **Container and deployment**

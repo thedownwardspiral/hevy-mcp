@@ -146,6 +146,14 @@ async def writer(make_client: Callable[..., Client], fake: FakeHTTP):
     assert not fake.unmatched, f"requests without a fake route: {fake.unmatched}"
 
 
+def non_finite_json(body: Any) -> httpx.Response:
+    """A Hevy answer whose JSON holds NaN or Infinity. JSON has no such values,
+    but Python writes and reads them, and reads 1e999 as Infinity too."""
+    return httpx.Response(
+        200, content=json.dumps(body), headers={"content-type": "application/json"}
+    )
+
+
 def sent(request: httpx.Request) -> Any:
     """The JSON body a request carried."""
     return json.loads(request.content)

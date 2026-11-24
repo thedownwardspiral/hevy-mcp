@@ -1,5 +1,6 @@
 """The tools that create and update Hevy data, enabled by HEVY_ENABLE_WRITES."""
 
+import math
 import typing
 
 import httpx
@@ -8,7 +9,7 @@ from fastmcp.exceptions import ToolError
 
 from hevy_mcp.models import BodyMeasurementInput, MeasurementField
 
-from .conftest import load, sent
+from .conftest import load, non_finite_json, sent
 
 WORKOUT_ID = "b459cba5-cd6d-463c-abd6-54f8eafcadcb"
 ROUTINE_ID = "c2ae1e2a-4d4b-4f0c-9a51-8f0c3e5d7b10"
@@ -160,6 +161,20 @@ async def test_update_workout_keeps_what_it_is_not_told_to_change(writer, fake):
     assert [s["weight_kg"] for s in squat["sets"]] == [140, 140]
     assert "index" not in squat["sets"][0]
     assert squat["sets"][1]["type"] == "failure"
+
+
+async def test_update_workout_refuses_to_send_back_a_non_finite_value(writer, fake):
+    # Sending it back as null would erase it; Hevy's value is kept as it is.
+    workout = load("hevy/workout.json")
+    workout["exercises"][1]["sets"][0]["weight_kg"] = math.inf
+    fake.get(f"/v1/workouts/{WORKOUT_ID}", non_finite_json(workout))
+
+    with pytest.raises(ToolError, match=r"Nothing was sent.*isn't finite.*Hevy app"):
+        await writer.call_tool(
+            "update_workout", {"workout_id": WORKOUT_ID, "title": "Renamed", "is_private": False}
+        )
+
+    assert [r for r in fake.hevy_requests() if r.method == "PUT"] == []
 
 
 async def test_update_workout_replaces_exercises_when_given(writer, fake):
@@ -652,6 +667,19 @@ async def test_update_body_measurement_keeps_other_values(writer, fake):
     assert result.structured_content["weight_kg"] == 79.9
     assert result.structured_content["waist"] == 80
     assert result.structured_content["neck_cm"] is None
+
+
+async def test_update_body_measurement_refuses_to_erase_a_non_finite_value(writer, fake):
+    # Hevy empties a field left out, so dropping the bad value would erase it.
+    measurement = load("hevy/body_measurement.json") | {"waist": math.nan}
+    fake.get("/v1/body_measurements/2024-08-14", non_finite_json(measurement))
+
+    with pytest.raises(ToolError, match="isn't finite"):
+        await writer.call_tool(
+            "update_body_measurement", {"date": "2024-08-14", "changes": {"weight_kg": 79.9}}
+        )
+
+    assert [r for r in fake.hevy_requests() if r.method == "PUT"] == []
 
 
 async def test_hevy_validation_errors_are_reported_on_one_line(writer, fake):

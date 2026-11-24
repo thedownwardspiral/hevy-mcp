@@ -40,6 +40,7 @@ from hevy_mcp.hevy import (
     HevyConflict,
     HevyError,
     HevyLimitReached,
+    HevyNonFinite,
     HevyNotFound,
     HevyRequestError,
     HevyWriteUncertain,
@@ -514,8 +515,15 @@ def _unfinished_plan(
     )
 
 
-# Hevy answered with a refusal, so that request changed nothing.
-_REFUSALS = (HevyAuthError, HevyConflict, HevyLimitReached, HevyNotFound, HevyRequestError)
+# Hevy answered with a refusal, or the request was never sent, so it changed nothing.
+_REFUSALS = (
+    HevyAuthError,
+    HevyConflict,
+    HevyLimitReached,
+    HevyNonFinite,
+    HevyNotFound,
+    HevyRequestError,
+)
 
 
 def _plan_bodies(routines: list[PlanRoutineInput]) -> list[dict[str, Any]]:

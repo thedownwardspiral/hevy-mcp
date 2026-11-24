@@ -1,9 +1,11 @@
 """Workout tools: listing, details, count, events, range queries and the training summary."""
 
+import math
+
 import pytest
 from fastmcp.exceptions import ToolError
 
-from .conftest import load, page, workout_at
+from .conftest import load, non_finite_json, page, workout_at
 
 
 async def test_list_workouts_returns_page_and_page_count(client, fake):
@@ -374,3 +376,71 @@ async def test_training_summary_flags_truncated_templates(make_client, fake):
         )
 
     assert result.structured_content["truncated"] is True
+
+
+async def test_non_finite_numbers_from_hevy_show_as_null(client, fake):
+    # FastMCP fails a whole tool call on NaN or Infinity, so one bad value
+    # would otherwise hide the workout.
+    workout = load("hevy/workout.json")
+    bad = {"weight_kg": math.inf, "rpe": math.nan, "score": -math.inf}
+    workout["exercises"][0]["sets"][1] |= bad
+    fake.get("/v1/workouts/b459cba5-cd6d-463c-abd6-54f8eafcadcb", non_finite_json(workout))
+
+    result = await client.call_tool(
+        "get_workout", {"workout_id": "b459cba5-cd6d-463c-abd6-54f8eafcadcb"}
+    )
+
+    returned = result.structured_content["exercises"][0]["sets"][1]
+    # "score" isn't a field Hevy documents; it's kept, and shown as null too.
+    assert (returned["weight_kg"], returned["rpe"], returned["score"]) == (None, None, None)
+    assert returned["reps"] == 8
+
+
+def summarize(client, fake, workout):
+    fake.get("/v1/workouts", non_finite_json(page("workouts", [workout])))
+    fake.get("/v1/exercise_templates", json=load("hevy/exercise_templates.json"))
+    return client.call_tool(
+        "get_training_summary", {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+    )
+
+
+# On the last working set, where max() would skip a NaN.
+@pytest.mark.parametrize("weight", [math.inf, math.nan])
+async def test_a_non_finite_weight_makes_its_volume_unknown_not_lower(client, fake, weight):
+    workout = load("hevy/workout.json")
+    workout["exercises"][0]["sets"][2]["weight_kg"] = weight
+
+    summary = (await summarize(client, fake, workout)).structured_content
+
+    by_title = {e["title"]: e for e in summary["exercises"]}
+    bench, squat = by_title["Bench Press (Barbell)"], by_title["Squat (Barbell)"]
+    assert bench["volume_kg"] is None
+    assert bench["top_weight_kg"] is None
+    assert summary["total_volume_kg"] is None
+    # The rest of the summary is unaffected.
+    assert squat["volume_kg"] == 140 * 5 + 140 * 4
+    assert squat["top_weight_kg"] == 140
+    assert bench["reps"] == 8 + 7
+
+
+async def test_a_non_finite_rep_count_makes_the_rep_totals_unknown(client, fake):
+    workout = load("hevy/workout.json")
+    workout["exercises"][1]["sets"][0]["reps"] = math.nan
+
+    summary = (await summarize(client, fake, workout)).structured_content
+
+    squat = next(e for e in summary["exercises"] if e["title"] == "Squat (Barbell)")
+    assert (squat["reps"], squat["volume_kg"]) == (None, None)
+    assert summary["total_reps"] is None
+
+
+async def test_a_volume_that_overflows_is_unknown(client, fake):
+    workout = load("hevy/workout.json")
+    workout["exercises"][0]["sets"][1] |= {"weight_kg": 1e200, "reps": 1e200}
+
+    summary = (await summarize(client, fake, workout)).structured_content
+
+    bench = next(e for e in summary["exercises"] if e["title"] == "Bench Press (Barbell)")
+    assert bench["volume_kg"] is None
+    assert bench["top_weight_kg"] == 1e200
+    assert summary["total_volume_kg"] is None

@@ -1,5 +1,6 @@
 """Derived statistics over workouts. Pure functions, no I/O."""
 
+import math
 from collections import Counter
 from collections.abc import Iterable
 from datetime import tzinfo
@@ -66,7 +67,7 @@ def training_summary(
             summary.volume_kg += sum(set_volume(s) for s in sets)
             weights = [s.weight_kg for s in sets if s.weight_kg is not None]
             if weights:
-                summary.top_weight_kg = max([*weights, summary.top_weight_kg or 0])
+                summary.top_weight_kg = _top([*weights, summary.top_weight_kg or 0])
             muscle = muscle_by_template.get(key) or UNKNOWN_MUSCLE_GROUP
             muscle_sets[muscle] += len(sets)
 
@@ -88,3 +89,9 @@ def training_summary(
         ],
         truncated=truncated,
     )
+
+
+def _top(values: list[float]) -> float:
+    """The largest value, or NaN if one is NaN: max() keeps or skips a NaN
+    depending on where it is in the list."""
+    return math.nan if any(math.isnan(v) for v in values) else max(values)
