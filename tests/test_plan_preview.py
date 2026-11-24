@@ -130,7 +130,7 @@ async def test_long_sets_and_notes_wrap_and_keep_rest_on_the_card(ui_writer, hev
     sets = [{"type": "warmup", "reps": 10, "weight_kg": 40}, {"type": "warmup", "reps": 5}]
     sets += [{"rep_range": {"start": 6, "end": 8}, "weight_kg": 100}] * 4
     sets += [{"type": "dropset", "reps": 12, "weight_kg": 70}]
-    note = "Pause at the bottom, see https://example.com/a-very-long-unbroken-coaching-link"
+    note = "Video: youtube.com/watch?v=Kx9ZqR4tWm2Lp8sNb3VhYc7DfGjT1aUe6Qo"
     squat = SQUAT | {"sets": sets, "notes": note}
     bench = BENCH | {"rest_seconds": 120}
     plan = {"title": "P", "routines": [{"title": "A", "exercises": [squat, bench]}]}
