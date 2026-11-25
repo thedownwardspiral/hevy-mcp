@@ -10,7 +10,13 @@ from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import ToolError
 from mcp.client.extension import advertise
 
-from hevy_mcp.plan_preview import PendingPlan, PendingPlans, describe_sets, superset_labels
+from hevy_mcp.plan_preview import (
+    PendingPlan,
+    PendingPlans,
+    Units,
+    describe_sets,
+    superset_labels,
+)
 
 from .conftest import load, sent
 from .test_journal import entries
@@ -299,20 +305,56 @@ async def test_the_preview_tools_need_writes_enabled(client, writer):
     assert on["save_plan"].annotations.read_only_hint is False
 
 
+KG_KM = Units(weight_unit="kg", distance_unit="kilometers")
+LBS_MI = Units(weight_unit="lbs", distance_unit="miles")
+# Mixed pairs, so a weight that followed the distance unit (or the reverse) fails.
+LBS_KM = Units(weight_unit="lbs", distance_unit="kilometers")
+KG_MI = Units(weight_unit="kg", distance_unit="miles")
+CARRY = {"reps": 5, "weight_kg": 100, "distance_meters": 5000}
+
+
 @pytest.mark.parametrize(
-    ("sets", "unit", "text"),
+    ("sets", "units", "text"),
     [
-        ([{"reps": 8, "weight_kg": 60}] * 2, "kg", "2 × 8 reps @ 60 kg"),
-        ([{"rep_range": {"start": 8, "end": 12}, "weight_kg": 20}], "lbs", "8–12 reps @ 44.1 lb"),
-        ([{"duration_seconds": 300, "distance_meters": 1609.344}], "lbs", "1.00 mi, 5 min"),
-        ([{"duration_seconds": 45}], "kg", "45s"),
-        ([{"type": "failure", "reps": 10}], "kg", "10 reps (failure)"),
-        ([{}], "kg", "no target"),
+        ([{"reps": 8, "weight_kg": 60}] * 2, KG_KM, "2 × 8 reps @ 60 kg"),
+        ([{"rep_range": {"start": 8, "end": 12}, "weight_kg": 20}], LBS_MI, "8–12 reps @ 44.1 lb"),
+        ([{"duration_seconds": 300, "distance_meters": 1609.344}], LBS_MI, "1.00 mi, 5 min"),
+        ([{"distance_meters": 5000}], KG_KM, "5.00 km"),
+        ([{"distance_meters": 800}], KG_KM, "800 m"),
+        ([CARRY], LBS_KM, "5 reps @ 220.5 lb, 5.00 km"),
+        ([CARRY], KG_MI, "5 reps @ 100 kg, 3.11 mi"),
+        ([{"duration_seconds": 45}], KG_KM, "45s"),
+        ([{"type": "failure", "reps": 10}], KG_KM, "10 reps (failure)"),
+        ([{}], KG_KM, "no target"),
     ],
 )
-def test_sets_read_as_one_line(sets, unit, text):
-    distance_unit = "miles" if unit == "lbs" else "kilometers"
-    assert describe_sets(sets, unit, distance_unit) == text
+def test_sets_read_as_one_line(sets, units, text):
+    assert describe_sets(sets, units) == text
+
+
+@pytest.mark.parametrize(
+    ("weight_unit", "distance_unit"),
+    [("miles", "kg"), ("lb", "kilometers"), ("LBS", "miles"), ("kg", "km")],
+)
+def test_units_refuse_swapped_or_unknown_names(weight_unit, distance_unit):
+    with pytest.raises(ValueError, match="Unknown"):
+        Units(weight_unit=weight_unit, distance_unit=distance_unit)
+
+
+def test_units_are_keyword_only():
+    with pytest.raises(TypeError):
+        Units("kg", "kilometers")
+
+
+async def test_a_unit_hevy_names_differently_is_refused_before_anything_is_shown(ui_writer, hevy):
+    user = load("hevy/user_info.json")
+    user["data"] |= {"weight_unit": "pounds"}
+    hevy.get("/v1/user/info", json=user)
+
+    with pytest.raises(ToolError, match="Unknown weight unit 'pounds'"):
+        await preview(ui_writer)
+
+    assert writes(hevy) == []
 
 
 async def test_the_text_plan_shows_supersets_and_exercise_notes(writer, hevy):

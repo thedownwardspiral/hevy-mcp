@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Any
+from typing import Any, Literal, get_args
 
 from prefab_ui.actions import SetState
 from prefab_ui.actions.mcp import SendMessage
@@ -109,20 +109,40 @@ def _number(value: float) -> str:
     return f"{value:.1f}".removesuffix(".0")
 
 
-def weight(kg: float, unit: str) -> str:
-    """A weight in the user's unit: Hevy says "lbs" or "kg"."""
-    if unit == "lbs":
-        return f"{_number(kg / KG_PER_LB)} lb"
-    return f"{_number(kg)} kg"
+WeightUnit = Literal["kg", "lbs"]
+DistanceUnit = Literal["kilometers", "miles"]
 
 
-def distance(metres: float, unit: str) -> str:
-    """A distance in the user's unit: Hevy says "miles" or "kilometers"."""
-    if unit == "miles":
-        return f"{metres / METRES_PER_MILE:.2f} mi"
-    if metres >= 1000:
-        return f"{metres / 1000:.2f} km"
-    return f"{_number(metres)} m"
+@dataclass(frozen=True, kw_only=True)
+class Units:
+    """The units the user prefers to see, as Hevy names them. Keyword-only and
+    checked, so swapped or unknown units fail instead of showing kg and km."""
+
+    weight_unit: WeightUnit
+    distance_unit: DistanceUnit
+
+    def __post_init__(self) -> None:
+        if self.weight_unit not in get_args(WeightUnit):
+            raise ValueError(f"Unknown weight unit {self.weight_unit!r}; expected kg or lbs.")
+        if self.distance_unit not in get_args(DistanceUnit):
+            raise ValueError(
+                f"Unknown distance unit {self.distance_unit!r}; expected kilometers or miles."
+            )
+
+    @property
+    def weight_label(self) -> str:
+        return "lb" if self.weight_unit == "lbs" else "kg"
+
+    def weight(self, kg: float) -> str:
+        value = kg / KG_PER_LB if self.weight_unit == "lbs" else kg
+        return f"{_number(value)} {self.weight_label}"
+
+    def distance(self, metres: float) -> str:
+        if self.distance_unit == "miles":
+            return f"{metres / METRES_PER_MILE:.2f} mi"
+        if metres >= 1000:
+            return f"{metres / 1000:.2f} km"
+        return f"{_number(metres)} m"
 
 
 def _duration(seconds: int) -> str:
@@ -132,7 +152,7 @@ def _duration(seconds: int) -> str:
     return f"{minutes}:{rest:02d}" if rest else f"{minutes} min"
 
 
-def _one_set(s: dict[str, Any], weight_unit: str, distance_unit: str) -> str:
+def _one_set(s: dict[str, Any], units: Units) -> str:
     """One planned set: "8–12 reps @ 135 lb", "5:00, 1.00 mi", "10 reps (warmup)"."""
     if (rep_range := s.get("rep_range")) is not None:
         reps = f"{rep_range['start']}–{rep_range['end']} reps"
@@ -141,11 +161,11 @@ def _one_set(s: dict[str, Any], weight_unit: str, distance_unit: str) -> str:
     else:
         reps = ""
     if s.get("weight_kg") is not None:
-        load = weight(s["weight_kg"], weight_unit)
+        load = units.weight(s["weight_kg"])
         reps = f"{reps} @ {load}" if reps else load
     extras = []
     if s.get("distance_meters") is not None:
-        extras.append(distance(s["distance_meters"], distance_unit))
+        extras.append(units.distance(s["distance_meters"]))
     if s.get("duration_seconds") is not None:
         extras.append(_duration(s["duration_seconds"]))
     if s.get("custom_metric") is not None:
@@ -155,19 +175,19 @@ def _one_set(s: dict[str, Any], weight_unit: str, distance_unit: str) -> str:
     return text if kind == "normal" else f"{text} ({kind})"
 
 
-def set_groups(sets: list[dict[str, Any]], weight_unit: str, distance_unit: str) -> list[str]:
+def set_groups(sets: list[dict[str, Any]], units: Units) -> list[str]:
     """The planned sets, with repeated sets counted: ["3 × 8 reps @ 60 kg", ...]."""
-    described = [_one_set(s, weight_unit, distance_unit) for s in sets]
+    described = [_one_set(s, units) for s in sets]
     runs = [(text, len(list(run))) for text, run in groupby(described)]
     return [text if count == 1 else f"{count} × {text}" for text, count in runs]
 
 
-def describe_sets(sets: list[dict[str, Any]], weight_unit: str, distance_unit: str) -> str:
+def describe_sets(sets: list[dict[str, Any]], units: Units) -> str:
     """The planned sets in a line: "5 reps @ 60 kg (warmup); 3 × 5 reps @ 100 kg"."""
-    return "; ".join(set_groups(sets, weight_unit, distance_unit))
+    return "; ".join(set_groups(sets, units))
 
 
-def _outline(plan: PendingPlan, titles: dict[str, str], units: tuple[str, str]) -> list[str]:
+def _outline(plan: PendingPlan, titles: dict[str, str], units: Units) -> list[str]:
     """The plan as text, with everything the card shows and save_plan saves:
     notes, sets in the user's units, rest times and supersets."""
     lines = [f"Routine folder: {plan.title}"]
@@ -177,7 +197,7 @@ def _outline(plan: PendingPlan, titles: dict[str, str], units: tuple[str, str]) 
             lines.append(f"   Notes: {routine['notes']}")
         supersets = superset_labels(routine["exercises"])
         for exercise in routine["exercises"]:
-            details = [describe_sets(exercise["sets"], *units)]
+            details = [describe_sets(exercise["sets"], units)]
             if rest := exercise.get("rest_seconds"):
                 details.append(f"rest {_duration(rest)}")
             if (superset_id := exercise.get("superset_id")) is not None:
@@ -204,9 +224,7 @@ def _how_to_save(plan: PendingPlan, preview_id: str) -> str:
     )
 
 
-def plan_summary(
-    plan: PendingPlan, titles: dict[str, str], preview_id: str, units: tuple[str, str]
-) -> str:
+def plan_summary(plan: PendingPlan, titles: dict[str, str], preview_id: str, units: Units) -> str:
     """What the model is told when the card is shown, since it can't see it."""
     return "\n".join(
         [
@@ -222,7 +240,7 @@ def plan_summary(
 
 
 def text_only_summary(
-    plan: PendingPlan, titles: dict[str, str], preview_id: str, units: tuple[str, str]
+    plan: PendingPlan, titles: dict[str, str], preview_id: str, units: Units
 ) -> str:
     """What the model is told when the client can't show the card."""
     return "\n".join(
@@ -242,9 +260,7 @@ def superset_labels(exercises: list[dict[str, Any]]) -> dict[int, str]:
     return {superset_id: chr(ord("A") + n % 26) for n, superset_id in enumerate(ids)}
 
 
-def _routine_card(
-    routine: dict[str, Any], titles: dict[str, str], weight_unit: str, distance_unit: str
-) -> None:
+def _routine_card(routine: dict[str, Any], titles: dict[str, str], units: Units) -> None:
     supersets = superset_labels(routine["exercises"])
     with Card():
         with CardHeader():
@@ -273,7 +289,7 @@ def _routine_card(
                                 Muted(exercise["notes"])
                         # One line per group of sets.
                         with TableCell(css_class=WRAP), Column(gap=0):
-                            for group in set_groups(exercise["sets"], weight_unit, distance_unit):
+                            for group in set_groups(exercise["sets"], units):
                                 Text(group)
                         rest = exercise.get("rest_seconds")
                         TableCell(_duration(rest) if rest else "—", css_class=TOP)
@@ -282,9 +298,8 @@ def _routine_card(
 def plan_view(
     plan: PendingPlan,
     titles: dict[str, str],
-    weight_unit: str,
-    distance_unit: str,
     preview_id: str,
+    units: Units,
 ) -> PrefabApp:
     """The preview card. Its button asks, in the chat, for the plan to be saved."""
     count = len(plan.routines)
@@ -293,10 +308,10 @@ def plan_view(
             CardTitle(plan.title)
             CardDescription(
                 f"A new routine folder with {count} routine{'s' if count != 1 else ''}. "
-                f"Weights in {'lb' if weight_unit == 'lbs' else 'kg'}."
+                f"Weights in {units.weight_label}."
             )
         for routine in plan.routines:
-            _routine_card(routine, titles, weight_unit, distance_unit)
+            _routine_card(routine, titles, units)
         with If(STATE.asked):
             Muted(
                 "The save request is in the chat. If it's waiting in your message box, "
