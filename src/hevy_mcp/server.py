@@ -959,12 +959,18 @@ def _add_plan_preview(mcp: FastMCP, state: _State) -> None:
         bodies = _plan_bodies(routines)
         wanted = {e["exercise_template_id"] for body in bodies for e in body["exercises"]}
         titles, user = await asyncio.gather(_template_titles(state, wanted), state.hevy.user_info())
-        units = Units(user.weight_unit or "kg", user.distance_unit or "kilometers")
+        try:
+            units = Units(
+                weight_unit=user.weight_unit or "kg",
+                distance_unit=user.distance_unit or "kilometers",
+            )
+        except ValueError as exc:
+            raise ToolError(f"Hevy's user info: {exc}") from exc
         plan = PendingPlan(title=title, routines=bodies)
         preview_id = pending.add(plan)
         if not ctx.client_supports_extension(UI_EXTENSION_ID):
             return ToolResult(content=text_only_summary(plan, titles, preview_id, units))
-        view = plan_view(plan, titles, units, preview_id)
+        view = plan_view(plan, titles, preview_id, units)
         summary = plan_summary(plan, titles, preview_id, units)
         return ToolResult(content=summary, structured_content=view)
 

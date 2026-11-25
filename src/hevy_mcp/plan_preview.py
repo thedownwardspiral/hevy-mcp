@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Any
+from typing import Any, Literal, get_args
 
 from prefab_ui.actions import SetState
 from prefab_ui.actions.mcp import SendMessage
@@ -109,18 +109,33 @@ def _number(value: float) -> str:
     return f"{value:.1f}".removesuffix(".0")
 
 
-@dataclass(frozen=True)
-class Units:
-    """The units the user prefers to see, as Hevy names them: weight "kg" or
-    "lbs", distance "kilometers" or "miles"."""
+WeightUnit = Literal["kg", "lbs"]
+DistanceUnit = Literal["kilometers", "miles"]
 
-    weight_unit: str
-    distance_unit: str
+
+@dataclass(frozen=True, kw_only=True)
+class Units:
+    """The units the user prefers to see, as Hevy names them. Keyword-only and
+    checked, so swapped or unknown units fail instead of showing kg and km."""
+
+    weight_unit: WeightUnit
+    distance_unit: DistanceUnit
+
+    def __post_init__(self) -> None:
+        if self.weight_unit not in get_args(WeightUnit):
+            raise ValueError(f"Unknown weight unit {self.weight_unit!r}; expected kg or lbs.")
+        if self.distance_unit not in get_args(DistanceUnit):
+            raise ValueError(
+                f"Unknown distance unit {self.distance_unit!r}; expected kilometers or miles."
+            )
+
+    @property
+    def weight_label(self) -> str:
+        return "lb" if self.weight_unit == "lbs" else "kg"
 
     def weight(self, kg: float) -> str:
-        if self.weight_unit == "lbs":
-            return f"{_number(kg / KG_PER_LB)} lb"
-        return f"{_number(kg)} kg"
+        value = kg / KG_PER_LB if self.weight_unit == "lbs" else kg
+        return f"{_number(value)} {self.weight_label}"
 
     def distance(self, metres: float) -> str:
         if self.distance_unit == "miles":
@@ -283,8 +298,8 @@ def _routine_card(routine: dict[str, Any], titles: dict[str, str], units: Units)
 def plan_view(
     plan: PendingPlan,
     titles: dict[str, str],
-    units: Units,
     preview_id: str,
+    units: Units,
 ) -> PrefabApp:
     """The preview card. Its button asks, in the chat, for the plan to be saved."""
     count = len(plan.routines)
@@ -293,7 +308,7 @@ def plan_view(
             CardTitle(plan.title)
             CardDescription(
                 f"A new routine folder with {count} routine{'s' if count != 1 else ''}. "
-                f"Weights in {'lb' if units.weight_unit == 'lbs' else 'kg'}."
+                f"Weights in {units.weight_label}."
             )
         for routine in plan.routines:
             _routine_card(routine, titles, units)
