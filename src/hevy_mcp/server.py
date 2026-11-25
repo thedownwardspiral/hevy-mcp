@@ -81,6 +81,7 @@ from hevy_mcp.models import (
 from hevy_mcp.plan_preview import (
     PendingPlan,
     PendingPlans,
+    Units,
     plan_summary,
     plan_view,
     text_only_summary,
@@ -958,12 +959,12 @@ def _add_plan_preview(mcp: FastMCP, state: _State) -> None:
         bodies = _plan_bodies(routines)
         wanted = {e["exercise_template_id"] for body in bodies for e in body["exercises"]}
         titles, user = await asyncio.gather(_template_titles(state, wanted), state.hevy.user_info())
-        units = (user.weight_unit or "kg", user.distance_unit or "kilometers")
+        units = Units(user.weight_unit or "kg", user.distance_unit or "kilometers")
         plan = PendingPlan(title=title, routines=bodies)
         preview_id = pending.add(plan)
         if not ctx.client_supports_extension(UI_EXTENSION_ID):
             return ToolResult(content=text_only_summary(plan, titles, preview_id, units))
-        view = plan_view(plan, titles, *units, preview_id=preview_id)
+        view = plan_view(plan, titles, units, preview_id)
         summary = plan_summary(plan, titles, preview_id, units)
         return ToolResult(content=summary, structured_content=view)
 

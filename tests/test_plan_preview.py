@@ -10,7 +10,13 @@ from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import ToolError
 from mcp.client.extension import advertise
 
-from hevy_mcp.plan_preview import PendingPlan, PendingPlans, describe_sets, superset_labels
+from hevy_mcp.plan_preview import (
+    PendingPlan,
+    PendingPlans,
+    Units,
+    describe_sets,
+    superset_labels,
+)
 
 from .conftest import load, sent
 from .test_journal import entries
@@ -311,8 +317,8 @@ async def test_the_preview_tools_need_writes_enabled(client, writer):
     ],
 )
 def test_sets_read_as_one_line(sets, unit, text):
-    distance_unit = "miles" if unit == "lbs" else "kilometers"
-    assert describe_sets(sets, unit, distance_unit) == text
+    units = Units(unit, "miles" if unit == "lbs" else "kilometers")
+    assert describe_sets(sets, units) == text
 
 
 async def test_the_text_plan_shows_supersets_and_exercise_notes(writer, hevy):
